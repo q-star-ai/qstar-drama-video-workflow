@@ -1,0 +1,24 @@
+[
+  {
+    "id": "doubao",
+    "model": "configure-on-site",
+    "enabled": false,
+    "input_modes": ["identity_refs", "first_last"],
+    "min_seconds": 5,
+    "max_seconds": 10,
+    "aspect_ratios": ["9:16", "16:9"],
+    "max_reference_images": 9,
+    "verification_status": "candidate"
+  },
+  {
+    "id": "minimax-h3",
+    "model": "local-runtime-profile",
+    "enabled": true,
+    "input_modes": ["identity_refs", "first_last"],
+    "min_seconds": 2,
+    "max_seconds": 15,
+    "aspect_ratios": ["9:16", "16:9", "1:1"],
+    "max_reference_images": 9,
+    "verification_status": "candidate"
+  }
+]

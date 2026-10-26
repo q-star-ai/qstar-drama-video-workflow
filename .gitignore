@@ -1,0 +1,17 @@
+.DS_Store
+__pycache__/
+*.pyc
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.env
+*.key
+*.pem
+secrets/
+customer-assets/
+generated/
