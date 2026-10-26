@@ -62,6 +62,11 @@ type Provider interface {
 	Poll(ctx context.Context, job *VideoJob, att *Attempt) (PollResult, error)
 }
 
+// ErrResumeUnavailable means the task ID is known but this worker cannot
+// query it (for example the H3 CLI process that owned it is gone). The job
+// waits for an operator instead of paying for a new submission.
+var ErrResumeUnavailable = errors.New("videojob: existing task cannot be resumed by this worker")
+
 // Reconciler is optional: it finds a task a crashed submit may have created.
 type Reconciler interface {
 	FindTask(ctx context.Context, job *VideoJob, att *Attempt) (externalID string, found bool, err error)
@@ -171,6 +176,10 @@ func (r *Runner) poll(ctx context.Context, j *VideoJob, att *Attempt) error {
 		return err
 	}
 	res, err := p.Poll(ctx, j, att)
+	if errors.Is(err, ErrResumeUnavailable) {
+		j.Status, j.StatusReason = StatusNeedsReconcile, err.Error()
+		return r.save(ctx, j)
+	}
 	if err != nil {
 		// Status check failed; the task is still there. Try again next Step.
 		return err
@@ -224,20 +233,26 @@ func (r *Runner) save(ctx context.Context, j *VideoJob) error {
 	return r.Store.SaveJob(ctx, j)
 }
 
-// ResolveReconcile is the operator action after checking the provider console:
-// attach the found task ID, or confirm none exists so the job may resubmit.
+// ResolveReconcile is the operator action after checking the provider console.
+// For a crashed submit: pass the task ID found there, or "" to confirm none
+// exists. For a task this worker could not resume: pass its ID to poll again,
+// or "" to give it up. "" lets the next Step submit (and pay) again, so it is
+// only for an operator who checked.
 func ResolveReconcile(j *VideoJob, externalID string) error {
 	att := j.Current()
-	if j.Status != StatusNeedsReconcile || att == nil || att.Status != AttemptSubmitting {
+	if j.Status != StatusNeedsReconcile || att == nil || (att.Status != AttemptSubmitting && att.Status != AttemptRunning) {
 		return fmt.Errorf("job %s is not awaiting reconcile", j.ID)
 	}
 	if externalID != "" {
+		if att.Status == AttemptRunning && externalID != att.ExternalTaskID {
+			return fmt.Errorf("job %s: task %s is already attached; cannot replace it with %s", j.ID, att.ExternalTaskID, externalID)
+		}
 		j.Status, j.StatusReason = StatusRunning, ""
 		att.ExternalTaskID, att.Status = externalID, AttemptRunning
 		return nil
 	}
 	// Keep the record; the next Step resubmits on the same provider.
 	j.Status, j.StatusReason = StatusQueued, ""
-	att.Status, att.ErrorClass, att.Error = AttemptFailed, ClassSubmitUnknown, "operator confirmed no task was created"
+	att.Status, att.ErrorClass, att.Error = AttemptFailed, ClassSubmitUnknown, "operator confirmed the task is not usable"
 	return nil
 }

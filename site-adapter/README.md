@@ -1,6 +1,6 @@
 # 短剧站点统一视频任务适配器
 
-供 drama.q-star.ink 后端（Go）与分镜前端接入的统一视频任务实现。它是独立、可测试的包，**尚未合入站点源码**：站点权威仓库与部署版本还没确认（见 [源码定位记录](../docs/site-source-audit.md)）。不要把它直接拷进 43 机上的静态构建目录。
+供 drama.q-star.ink 后端（Go）与分镜前端接入的统一视频任务实现。它是独立、可测试的包，站点侧接入已基于 `qstar-drama-site-recovery` 历史快照完成（该仓库 `docs/VIDEO_JOB_INTEGRATION.md`），站点内的 `pkg/videojob` 是本目录的副本；线上后端版本仍未确认（见 [源码定位记录](../docs/site-source-audit.md)）。不要把它直接拷进 43 机上的静态构建目录。
 
 ## 组成
 
@@ -11,9 +11,11 @@
 | `videojob/job.go` | VideoJob 状态机、尝试记录、切换事件、ffprobe 结果、人工质检；`MemStore` |
 | `videojob/runner.go` | worker 每次推进一步：已有外部任务 ID 只轮询不重提；提交前先落库，崩溃后进入 `needs_reconcile`；安全提示词重试与供应商切换分开记录；费用上限 |
 | `videojob/h3.go` | MiniMax H3 GPU 保底通道：`prompt_id` 续查、超时、按 GPU 时长计费、只有实例所有者且无其他任务时才停机 |
+| `videojob/assets.go` | 用临时签名地址下载素材并校验 sha256；与批准版本不符即拒绝提交 |
+| `videojob/h3cli.go` | 包装 `minimax-h3-video` Skill 的 `h3-cloud generate`：参考图与首尾帧互斥、无灰盒输入；每次尝试独立运行目录，已存在即拒绝再次付费；进程丢失、异常退出或超时进入 `needs_reconcile`；完成后保存只读 `status` 输出作为停机证据。manifest 字段与续查命令为可配置假设，需按 Skill 核对 |
 | `videojob/probe.go` | 解析 `ffprobe` 并对照时长/画幅/音轨 |
 | `videojob/httpapi.go` | `GET capabilities`、`POST plan`、`POST jobs`（必须带 `Idempotency-Key`）、`GET jobs/{id}`；只入队，不在 Web 请求里跑生成 |
-| `videojob/sqlstore.go`、`migrations/001_*` | Postgres 存储与增量迁移；旧 VideoGeneration 通过 `legacy_video_generation_id` 关联，不改旧表 |
+| `videojob/sqlstore.go`、`migrations/001_*` | Postgres 存储与增量迁移，供独立部署参考。短剧站点用 GORM（MySQL/SQLite），站点内改用 `GormJobStore` 与 AutoMigrate，不使用这两个文件 |
 | `web/videoJobForm.ts` | 前端按能力表渲染输入模式；H3 下灰盒选项显示禁用及原因；首尾帧模式提示需人工核脸；任务卡显示实际模型、任务 ID、费用、切换和质检 |
 
 ## 接入步骤（站点源码确认后）
