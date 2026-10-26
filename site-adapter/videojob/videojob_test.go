@@ -1,8 +1,12 @@
 package videojob
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -341,6 +345,47 @@ func TestH3ProviderResumesAndStopsOnlyOwnedIdleInstance(t *testing.T) {
 	rt.owner = job.ID
 	if !h3.stopIfOwner(ctx, got, att) || rt.stopped != 1 {
 		t.Fatal("did not stop owned idle instance")
+	}
+}
+
+func TestAPIIdempotentCreate(t *testing.T) {
+	store := NewMemStore()
+	n := 0
+	api := &API{Store: store, NewID: func() string { n++; return "job-" + string(rune('0'+n)) },
+		Capabilities: func(context.Context) []Capability { return []Capability{doubaoCap(), H3Capability("h3-profile", true)} }}
+	mux := http.NewServeMux()
+	api.Routes(mux, "/api/video")
+	body, _ := json.Marshal(sampleShot(ModeIdentityRefs))
+	post := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/video/jobs", bytes.NewReader(body))
+		req.Header.Set("Idempotency-Key", "ep01/01/v1")
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		return w
+	}
+	first, second := post(), post()
+	if first.Code != http.StatusAccepted || second.Code != http.StatusOK {
+		t.Fatalf("codes %d %d: %s", first.Code, second.Code, second.Body)
+	}
+	var a, b VideoJob
+	json.Unmarshal(first.Body.Bytes(), &a)
+	json.Unmarshal(second.Body.Bytes(), &b)
+	if a.ID != b.ID || len(a.Chain) != 2 {
+		t.Fatalf("ids %s %s chain %d", a.ID, b.ID, len(a.Chain))
+	}
+
+	grey, _ := json.Marshal(sampleShot(ModeVideoRef))
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("POST", "/api/video/plan", bytes.NewReader(grey)))
+	var plan PlanResponse
+	json.Unmarshal(w.Body.Bytes(), &plan)
+	if len(plan.Chain) != 0 || plan.Rejected["minimax-h3"] == "" {
+		t.Fatalf("greybox plan %s", w.Body)
+	}
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, httptest.NewRequest("GET", "/api/video/capabilities", nil))
+	if strings.Contains(strings.ToLower(w.Body.String()), "key") {
+		t.Fatalf("capabilities leak something key-like: %s", w.Body)
 	}
 }
 
