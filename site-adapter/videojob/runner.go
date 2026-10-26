@@ -46,8 +46,10 @@ type PollResult struct {
 	State        TaskState
 	OutputURI    string
 	CostMicroUSD int64
-	GPUSeconds   float64
-	Err          *ProviderError
+	// CostEstimated marks rate-based costs that are not a provider invoice.
+	CostEstimated bool
+	GPUSeconds    float64
+	Err           *ProviderError
 	// InstanceStopped is set when a GPU provider shut down its own instance.
 	InstanceStopped bool
 }
@@ -179,6 +181,7 @@ func (r *Runner) poll(ctx context.Context, j *VideoJob, att *Attempt) error {
 	// Record measured GPU time, cost and stop evidence before deciding what
 	// happens next, so a job handed to an operator still shows what it spent.
 	att.CostMicroUSD, att.GPUSeconds = max(att.CostMicroUSD, res.CostMicroUSD), max(att.GPUSeconds, res.GPUSeconds)
+	att.CostEstimated = att.CostEstimated || res.CostEstimated
 	att.InstanceStopped = att.InstanceStopped || res.InstanceStopped
 	if errors.Is(err, ErrResumeUnavailable) {
 		j.Status, j.StatusReason = StatusNeedsReconcile, err.Error()

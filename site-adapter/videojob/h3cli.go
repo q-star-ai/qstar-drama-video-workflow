@@ -226,6 +226,7 @@ func (p *H3CLIProvider) Poll(ctx context.Context, job *VideoJob, att *Attempt) (
 	dir := p.runDir(job)
 	res := PollResult{}
 	res.CostMicroUSD, res.GPUSeconds = p.cost(att)
+	res.CostEstimated = true
 	promptID, output := p.manifest(dir)
 	if promptID != "" {
 		att.ExternalTaskID = promptID

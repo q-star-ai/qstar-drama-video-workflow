@@ -155,6 +155,7 @@ func (h *H3Provider) Poll(ctx context.Context, job *VideoJob, att *Attempt) (Pol
 	}
 	res := PollResult{}
 	res.CostMicroUSD, res.GPUSeconds = h.cost(att)
+	res.CostEstimated = true
 	switch st.State {
 	case TaskPending:
 		if h.MaxRuntime > 0 && h.now().Sub(att.StartedAt) > h.MaxRuntime {

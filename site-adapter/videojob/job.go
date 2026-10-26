@@ -56,8 +56,8 @@ type Attempt struct {
 	Error          string        `json:"error,omitempty"`
 	OutputURI      string        `json:"output_uri,omitempty"`
 	CostMicroUSD   int64         `json:"cost_micro_usd"`
-	// CostEstimated is true when CostMicroUSD comes from the capability's
-	// price estimate rather than a provider or GPU-time measurement.
+	// CostEstimated is true when CostMicroUSD is rate-based rather than a
+	// provider invoice, including an H3 attempt-time estimate.
 	CostEstimated bool    `json:"cost_estimated,omitempty"`
 	GPUSeconds    float64 `json:"gpu_seconds,omitempty"`
 	// InstanceID and InstanceStopped are set by GPU providers such as H3.
