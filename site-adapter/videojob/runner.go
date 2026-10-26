@@ -176,16 +176,24 @@ func (r *Runner) poll(ctx context.Context, j *VideoJob, att *Attempt) error {
 		return err
 	}
 	res, err := p.Poll(ctx, j, att)
+	// Record measured GPU time, cost and stop evidence before deciding what
+	// happens next, so a job handed to an operator still shows what it spent.
+	att.CostMicroUSD, att.GPUSeconds = max(att.CostMicroUSD, res.CostMicroUSD), max(att.GPUSeconds, res.GPUSeconds)
+	att.InstanceStopped = att.InstanceStopped || res.InstanceStopped
 	if errors.Is(err, ErrResumeUnavailable) {
 		j.Status, j.StatusReason = StatusNeedsReconcile, err.Error()
 		return r.save(ctx, j)
 	}
 	if err != nil {
 		// Status check failed; the task is still there. Try again next Step.
+		// Keep the cost already measured on this poll.
+		if res.CostMicroUSD > 0 {
+			if saveErr := r.save(ctx, j); saveErr != nil {
+				return saveErr
+			}
+		}
 		return err
 	}
-	att.CostMicroUSD, att.GPUSeconds = max(att.CostMicroUSD, res.CostMicroUSD), max(att.GPUSeconds, res.GPUSeconds)
-	att.InstanceStopped = att.InstanceStopped || res.InstanceStopped
 	switch res.State {
 	case TaskPending:
 		return r.save(ctx, j)

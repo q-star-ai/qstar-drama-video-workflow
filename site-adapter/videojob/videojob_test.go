@@ -388,3 +388,30 @@ func TestAPIIdempotentCreate(t *testing.T) {
 		t.Fatalf("capabilities leak something key-like: %s", w.Body)
 	}
 }
+
+// resumeLost reports measured cost together with ErrResumeUnavailable, as the
+// H3 CLI provider does when the GPU is not confirmed stopped.
+type resumeLost struct{ fakeProvider }
+
+func (r *resumeLost) Poll(context.Context, *VideoJob, *Attempt) (PollResult, error) {
+	return PollResult{CostMicroUSD: 750_000, GPUSeconds: 900, InstanceStopped: false}, ErrResumeUnavailable
+}
+
+func TestCostIsRecordedWhenHandedToOperator(t *testing.T) {
+	p := &resumeLost{fakeProvider{id: "doubao", submitFn: func(int) (string, error) { return "task-1", nil }}}
+	req, _ := BuildRequest(sampleShot(ModeIdentityRefs))
+	job := NewJob("job-cost", "k-cost", req, []Capability{doubaoCap()}, 0, time.Unix(0, 0))
+	store := NewMemStore()
+	store.CreateJob(context.Background(), job)
+	r := &Runner{Store: store, Providers: map[string]Provider{"doubao": p}}
+	ctx := context.Background()
+	r.Step(ctx, job.ID)
+	r.Step(ctx, job.ID)
+	got, _ := store.GetJob(ctx, job.ID)
+	if got.Status != StatusNeedsReconcile {
+		t.Fatalf("status %s", got.Status)
+	}
+	if cur := got.Current(); cur.CostMicroUSD != 750_000 || cur.GPUSeconds != 900 || got.TotalCostMicroUSD() != 750_000 {
+		t.Fatalf("cost not recorded before reconcile: %+v", cur)
+	}
+}
