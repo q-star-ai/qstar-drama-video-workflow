@@ -80,6 +80,7 @@ func TestBuildRequestRejects(t *testing.T) {
 		"wardrobe":       func(s *Shot) { s.Wardrobe = map[string]AssetRef{} },
 		"checksum":       func(s *Shot) { s.Environment.SHA256 = "" },
 		"signed url":     func(s *Shot) { s.Environment.URI = "https://cdn.example/office.png?token=abc" },
+		"public url":     func(s *Shot) { s.Environment.URI = "https://cdn.example/office.png" },
 		"unreviewed":     func(s *Shot) { s.InputMode = ModeFirstLast; s.Previs.ReviewedBy = "" },
 		"no first":       func(s *Shot) { s.InputMode = ModeFirstLast; s.Previs.FirstFrame = nil },
 		"no greybox":     func(s *Shot) { s.InputMode = ModeVideoRef; s.Previs.Greybox = nil },

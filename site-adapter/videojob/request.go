@@ -97,8 +97,8 @@ func checkRef(ref AssetRef, label string) error {
 	if ref.AssetID == "" || ref.URI == "" || ref.Version == "" || ref.SHA256 == "" {
 		return fmt.Errorf("%s: asset_id, uri, version and sha256 are required", label)
 	}
-	if (strings.HasPrefix(ref.URI, "http://") || strings.HasPrefix(ref.URI, "https://")) && strings.Contains(ref.URI, "?") {
-		return fmt.Errorf("%s: store a private asset URI, not a signed URL", label)
+	if strings.HasPrefix(ref.URI, "http://") || strings.HasPrefix(ref.URI, "https://") {
+		return fmt.Errorf("%s: store a private asset URI, not a web URL", label)
 	}
 	return nil
 }
