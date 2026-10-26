@@ -78,8 +78,8 @@ def validate(manifest):
         for field in ("visual_en", "action_en", "camera_en"):
             require_text(shot.get(field), f"shot {shot_id}.{field}")
         mode = shot.get("input_mode")
-        if mode not in ("identity_refs", "first_last"):
-            raise ManifestError(f"shot {shot_id}: input_mode must be identity_refs or first_last")
+        if mode not in ("identity_refs", "first_last", "video_ref"):
+            raise ManifestError(f"shot {shot_id}: input_mode must be identity_refs, first_last or video_ref")
         previs = shot.get("previs", {})
         if not isinstance(previs, dict):
             raise ManifestError(f"shot {shot_id}: previs must be an object")
@@ -91,6 +91,8 @@ def validate(manifest):
                 raise ManifestError(f"shot {shot_id}: {key} has wrong role")
         if mode == "first_last" and not previs.get("first_frame_asset_id"):
             raise ManifestError(f"shot {shot_id}: first_last requires a first frame")
+        if mode == "video_ref" and not previs.get("greybox_clip_asset_id"):
+            raise ManifestError(f"shot {shot_id}: video_ref requires a greybox clip")
     return {"episode_id": manifest["episode_id"], "shot_count": len(shots), "duration_seconds": sum(s["duration_seconds"] for s in shots)}
 
 
@@ -104,13 +106,16 @@ def find_shot(manifest, shot_id):
 def job_for_shot(manifest, shot):
     mode = shot["input_mode"]
     references = []
-    if mode == "identity_refs":
+    if mode in ("identity_refs", "video_ref"):
         for cid in shot["character_ids"]:
             references.append({"asset_id": manifest["characters"][cid]["identity_asset_id"], "purpose": f"identity:{cid}"})
             references.append({"asset_id": shot["wardrobe_by_character"][cid], "purpose": f"wardrobe:{cid}"})
         references.append({"asset_id": shot["environment_asset_id"], "purpose": "environment"})
         if len(references) > 9:
-            raise ManifestError(f"shot {shot['id']}: {len(references)} references exceed H3's 9-image limit")
+            raise ManifestError(f"shot {shot['id']}: {len(references)} reference images exceed the 9-image limit")
+        if mode == "video_ref":
+            # Only providers that declare verified video input list video_ref; H3 does not.
+            references.append({"asset_id": shot["previs"]["greybox_clip_asset_id"], "purpose": "greybox"})
     else:
         references.append({"asset_id": shot["previs"]["first_frame_asset_id"], "purpose": "first_frame"})
         if shot["previs"].get("last_frame_asset_id"):
@@ -145,7 +150,7 @@ def plan(manifest, providers, shot):
             continue
         if job["aspect_ratio"] not in provider.get("aspect_ratios", []):
             continue
-        if len(job["references"]) > provider.get("max_reference_images", 0):
+        if sum(1 for ref in job["references"] if ref["purpose"] != "greybox") > provider.get("max_reference_images", 0):
             continue
         candidates.append({"provider": provider["id"], "model": provider.get("model"), "verification_status": provider.get("verification_status", "candidate")})
     job["candidate_chain"] = candidates

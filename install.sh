@@ -4,7 +4,7 @@ set -eu
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 skill_source="$repo_root/skills/qstar-drama-video"
 
-for skill_parent in "$HOME/.codex/skills" "$HOME/.claude/skills" "$HOME/.config/opencode/skills" "$HOME/.agents/skills"; do
+for skill_parent in "$HOME/.codex/skills" "$HOME/.claude/skills" "$HOME/.config/opencode/skills" "$HOME/.agents/skills" "$HOME/.openclaw/skills"; do
   mkdir -p "$skill_parent"
   destination="$skill_parent/qstar-drama-video"
   if [ -L "$destination" ]; then
