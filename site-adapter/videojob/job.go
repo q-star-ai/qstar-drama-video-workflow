@@ -87,6 +87,7 @@ type Output struct {
 	HasAudio        bool     `json:"has_audio"`
 	SizeBytes       int64    `json:"size_bytes"`
 	ProbeFailures   []string `json:"probe_failures,omitempty"`
+	Unplayable      bool     `json:"unplayable,omitempty"` // confirmed no readable video, distinct from format mismatch
 }
 
 // QC failure codes shared with the Skill's character-consistency reference.
@@ -127,6 +128,12 @@ type VideoJob struct {
 	Fallbacks       []FallbackEvent `json:"fallbacks"`
 	Output          *Output         `json:"output,omitempty"`
 	QC              *QCResult       `json:"qc,omitempty"`
+	ProbeAttempts   int             `json:"probe_attempts,omitempty"`
+	ProbeNextAt     *time.Time      `json:"probe_next_at,omitempty"`
+	ProbeErrorKind  string          `json:"probe_error_kind,omitempty"`
+	ProbeOutputURI  string          `json:"probe_output_uri,omitempty"`
+	ProbeReviewedBy string          `json:"probe_reviewed_by,omitempty"`
+	ProbeReviewNote string          `json:"probe_review_note,omitempty"`
 	// LegacyVideoGenerationID links the site's existing VideoGeneration row.
 	LegacyVideoGenerationID string    `json:"legacy_video_generation_id,omitempty"`
 	CreatedAt               time.Time `json:"created_at"`

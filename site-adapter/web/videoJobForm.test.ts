@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { modeOptions, describeJob, idempotencyKey, type Capability, type ShotDraft } from './videoJobForm.ts'
+import { modeOptions, describeJob, idempotencyKey, reserveAttempt, releaseAttempt, type Capability, type ShotDraft } from './videoJobForm.ts'
 
 const h3: Capability = {
   provider: 'minimax-h3', model: 'h3-profile', enabled: true, fallback: true, verification_status: 'candidate',
@@ -60,4 +60,17 @@ test('job card shows model, task, cost, fallback and never "完成" before QC', 
 
 test('idempotency key is stable per shot revision and mode', () => {
   assert.equal(idempotencyKey('ep01', '01', 3, 'first_last'), 'ep01/01/r3/first_last')
+})
+
+test('uncertain submission reuses its key and a confirmed reroll gets a new key', () => {
+  const values = new Map<string, string>()
+  const storage = { getItem: (k: string) => values.get(k) ?? null, setItem: (k: string, v: string) => { values.set(k, v) }, removeItem: (k: string) => { values.delete(k) } }
+  let n = 0
+  const makeId = () => `attempt-${++n}`
+  const first = reserveAttempt(storage, 'ep01/01/r3/first_last', makeId)
+  assert.deepEqual(reserveAttempt(storage, 'ep01/01/r3/first_last', makeId), first)
+  releaseAttempt(storage, first.marker, first.key)
+  const next = reserveAttempt(storage, 'ep01/01/r3/first_last', makeId)
+  assert.notEqual(next.key, first.key)
+  assert.equal(n, 2)
 })

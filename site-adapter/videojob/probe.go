@@ -54,7 +54,9 @@ func ParseFFprobe(data []byte, assetURI string) (Output, error) {
 // ProbeFailures. requireAudio is set when the shot must carry sound.
 func CheckOutput(req Request, out Output, requireAudio bool) Output {
 	out.ProbeFailures = nil
+	out.Unplayable = false
 	if out.VideoCodec == "" || out.Width == 0 || out.Height == 0 {
+		out.Unplayable = true
 		out.ProbeFailures = append(out.ProbeFailures, "no readable video stream")
 	}
 	if math.Abs(out.DurationSeconds-req.DurationSeconds) > 0.5 {

@@ -104,7 +104,7 @@ export type JobView = {
   candidate_chain: Capability[]
   attempts: { provider: string; model: string; kind: string; external_task_id?: string; status: string; error_class?: string; cost_micro_usd: number }[]
   fallbacks: { from: string; to: string; class: string; reason: string }[]
-  output?: { duration_seconds: number; width: number; height: number; has_audio: boolean; probe_failures?: string[] }
+  output?: { duration_seconds: number; width: number; height: number; has_audio: boolean; probe_failures?: string[]; unplayable?: boolean }
   qc?: { passed: boolean; failures?: string[]; reviewer: string }
 }
 
@@ -122,7 +122,7 @@ export function describeJob(job: JobView): string {
     case 'qc_pending':
       return `待人工质检 · ${parts.join(' · ')}`
     case 'needs_reconcile':
-      return `提交结果未知，需核对供应商后台，勿重复提交 · ${parts.join(' · ')}`
+      return `需人工核对，勿重复提交${job.status_reason ? `：${job.status_reason}` : ''} · ${parts.join(' · ')}`
     case 'failed':
     case 'blocked':
       return `${job.status === 'failed' ? '失败' : '受阻'}：${job.status_reason ?? ''} · ${parts.join(' · ')}`
@@ -131,9 +131,29 @@ export function describeJob(job: JobView): string {
   }
 }
 
-/** Stable per-shot-version key so a double click never pays twice. */
+/** Namespace for pending attempts of one shot revision. */
 export function idempotencyKey(episodeId: string, shotId: string, shotRevision: number, inputMode: InputMode): string {
   return `${episodeId}/${shotId}/r${shotRevision}/${inputMode}`
+}
+
+type AttemptStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>
+
+/** Keep a single key across uncertain retries; release it only after a response. */
+export function reserveAttempt(storage: AttemptStorage, base: string, makeId: () => string): { marker: string; key: string } {
+  const marker = `qstar.videojob.pending:${base}`
+  let key = storage.getItem(marker)
+  if (!key) {
+    const id = makeId()
+    if (!id) throw new Error('无法生成任务编号')
+    key = `${base}/${id}`
+    storage.setItem(marker, key)
+    if (storage.getItem(marker) !== key) throw new Error('无法保存任务编号')
+  }
+  return { marker, key }
+}
+
+export function releaseAttempt(storage: AttemptStorage, marker: string, key: string): void {
+  if (storage.getItem(marker) === key) storage.removeItem(marker)
 }
 
 export async function createJob(base: string, shot: unknown, key: string, fetchImpl: typeof fetch = fetch): Promise<JobView> {
