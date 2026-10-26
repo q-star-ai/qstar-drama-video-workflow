@@ -25,19 +25,11 @@ type H3CLIConfig struct {
 	Megapixels float64 // 0.2–1.0
 	WorkRoot   string  // one directory per attempt
 	// Manifest describes where the run records prompt_id and the MP4. The
-	// default (manifest.json in the run directory with keys prompt_id and
-	// output_path) is an assumption to confirm against Skill 0.2.0.
-	ManifestFile string
-	PromptIDKey  string
-	OutputKey    string
-	// ResumeArgs, if set, re-attaches to an existing prompt after a worker
-	// restart, e.g. ["resume", "--config", "{config}", "--prompt-id", "{prompt_id}"].
-	// The Skill notes describe resuming but not the command, so it is empty
-	// by default and an orphaned prompt goes to needs_reconcile instead.
-	ResumeArgs []string
-	// StoppedMarker is a substring of `status` output that proves the GPU
-	// instance is stopped; it is recorded as stop evidence.
-	StoppedMarker      string
+	// h3-cloud creates <output-dir>/<h3-job-id>/manifest.json with prompt_id
+	// and artifact_path. The run directory is passed as --output-dir.
+	ManifestFile       string
+	PromptIDKey        string
+	OutputKey          string
 	HourlyRateMicroUSD int64
 	MaxRuntime         time.Duration
 }
@@ -169,6 +161,7 @@ func (p *H3CLIProvider) Submit(ctx context.Context, job *VideoJob, att *Attempt)
 	if err != nil {
 		return "", err
 	}
+	args = append(args, "--output-dir", dir)
 	// Everything before this line is free; from here the GPU may bill.
 	p.start(dir, args)
 	return "h3run:pending", nil
@@ -179,7 +172,14 @@ func (p *H3CLIProvider) manifest(dir string) (promptID, output string) {
 	if name == "" {
 		name = "manifest.json"
 	}
-	data, err := os.ReadFile(filepath.Join(dir, name))
+	// h3-cloud generates its own job ID beneath --output-dir. A single
+	// attempt must have exactly one manifest; ambiguity needs manual review.
+	matches, err := filepath.Glob(filepath.Join(dir, "*", name))
+	if err != nil || len(matches) != 1 {
+		return "", ""
+	}
+	manifestPath := matches[0]
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return "", ""
 	}
@@ -194,9 +194,9 @@ func (p *H3CLIProvider) manifest(dir string) (promptID, output string) {
 		s, _ := m[k].(string)
 		return s
 	}
-	promptID, output = key(p.Cfg.PromptIDKey, "prompt_id"), key(p.Cfg.OutputKey, "output_path")
+	promptID, output = key(p.Cfg.PromptIDKey, "prompt_id"), key(p.Cfg.OutputKey, "artifact_path")
 	if output != "" && !filepath.IsAbs(output) {
-		output = filepath.Join(dir, output)
+		output = filepath.Join(filepath.Dir(manifestPath), output)
 	}
 	return promptID, output
 }
@@ -210,7 +210,15 @@ func (p *H3CLIProvider) cost(att *Attempt) (int64, float64) {
 func (p *H3CLIProvider) stopEvidence(ctx context.Context, dir string) bool {
 	out, err := exec.CommandContext(ctx, p.Cfg.Command, "status", "--config", p.Cfg.ConfigPath).CombinedOutput()
 	_ = os.WriteFile(filepath.Join(dir, "status-after.log"), out, 0o600)
-	return err == nil && p.Cfg.StoppedMarker != "" && strings.Contains(string(out), p.Cfg.StoppedMarker)
+	if err != nil {
+		return false
+	}
+	var status struct {
+		Status struct {
+			State string `json:"state"`
+		} `json:"status"`
+	}
+	return json.Unmarshal(out, &status) == nil && status.Status.State == "stopped"
 }
 
 // Poll follows the local run (or a resumed one); it never starts `generate`.
@@ -230,16 +238,7 @@ func (p *H3CLIProvider) Poll(ctx context.Context, job *VideoJob, att *Attempt) (
 		if output != "" && fileNonEmpty(output) {
 			return p.finish(ctx, job, dir, output, res)
 		}
-		if promptID == "" || len(p.Cfg.ResumeArgs) == 0 {
-			return res, fmt.Errorf("%w: run %s has no live process (prompt_id %q); check `h3-cloud status`", ErrResumeUnavailable, dir, promptID)
-		}
-		args := make([]string, len(p.Cfg.ResumeArgs))
-		for i, a := range p.Cfg.ResumeArgs {
-			args[i] = strings.NewReplacer("{config}", p.Cfg.ConfigPath, "{prompt_id}", promptID).Replace(a)
-		}
-		p.start(dir, args)
-		res.State = TaskPending
-		return res, nil
+		return res, fmt.Errorf("%w: run %s has no live process (prompt_id %q); check `h3-cloud status`", ErrResumeUnavailable, dir, promptID)
 	}
 
 	select {
@@ -267,12 +266,15 @@ func (p *H3CLIProvider) Poll(ctx context.Context, job *VideoJob, att *Attempt) (
 }
 
 func (p *H3CLIProvider) finish(ctx context.Context, job *VideoJob, dir, output string, res PollResult) (PollResult, error) {
+	res.InstanceStopped = p.stopEvidence(ctx, dir)
+	if !res.InstanceStopped {
+		return res, fmt.Errorf("%w: H3 output exists but the GPU is not confirmed stopped; inspect %s", ErrResumeUnavailable, dir)
+	}
 	uri, err := p.StoreOutput(ctx, job, output)
 	if err != nil {
 		return PollResult{}, fmt.Errorf("store H3 output: %w", err)
 	}
 	res.State, res.OutputURI = TaskSucceeded, uri
-	res.InstanceStopped = p.stopEvidence(ctx, dir)
 	return res, nil
 }
 

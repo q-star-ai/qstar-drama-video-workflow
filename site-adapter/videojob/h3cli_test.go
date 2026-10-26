@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,16 +14,21 @@ import (
 	"time"
 )
 
-// fakeCLI mimics `h3-cloud`: generate logs its args, writes the manifest with
-// a prompt_id, then the MP4 once release.txt exists; status prints a marker.
+// fakeCLI mimics h3-cloud's output layout and JSON status contract.
 const fakeCLI = `#!/bin/sh
-if [ "$1" = status ]; then echo "instance: stopped"; exit 0; fi
+if [ "$1" = status ]; then echo '{"status":{"state":"stopped"}}'; exit 0; fi
 printf '%s\n' "$@" > args.txt
-printf '{"prompt_id":"p-123"}' > manifest.json
+out=''; while [ "$#" -gt 0 ]; do
+  if [ "$1" = '--output-dir' ]; then out="$2"; break; fi
+  shift
+done
+[ -n "$out" ] || exit 2
+mkdir -p "$out/job-fake"
+printf '{"prompt_id":"p-123"}' > "$out/job-fake/manifest.json"
 i=0; while [ ! -f release.txt ] && [ $i -lt 200 ]; do sleep 0.05; i=$((i+1)); done
 if [ -f fail.txt ]; then echo boom >&2; exit 3; fi
-printf 'mp4' > out.mp4
-printf '{"prompt_id":"p-123","output_path":"out.mp4"}' > manifest.json
+printf 'mp4' > "$out/job-fake/out.mp4"
+printf '{"prompt_id":"p-123","artifact_path":"out.mp4"}' > "$out/job-fake/manifest.json"
 `
 
 func h3Fixture(t *testing.T) (*H3CLIProvider, *VideoJob, *Runner, string) {
@@ -47,7 +53,7 @@ func h3Fixture(t *testing.T) (*H3CLIProvider, *VideoJob, *Runner, string) {
 	}
 	now := time.Unix(1000, 0)
 	p := &H3CLIProvider{
-		Cfg:   H3CLIConfig{Command: cli, ConfigPath: "/worker/h3.yaml", Megapixels: 0.5, WorkRoot: filepath.Join(root, "runs"), StoppedMarker: "stopped", HourlyRateMicroUSD: 3_600_000},
+		Cfg:   H3CLIConfig{Command: cli, ConfigPath: "/worker/h3.yaml", Megapixels: 0.5, WorkRoot: filepath.Join(root, "runs"), HourlyRateMicroUSD: 3_600_000},
 		Fetch: &AssetFetcher{Sign: func(uri string) (string, error) { return srv.URL + "/" + strings.TrimPrefix(uri, "asset://"), nil }},
 		StoreOutput: func(_ context.Context, j *VideoJob, local string) (string, error) {
 			return "asset://videos/" + j.ID + ".mp4", nil
@@ -80,7 +86,7 @@ func TestH3CLIRunRecordsPromptAndFinishes(t *testing.T) {
 	waitFor(t, func() bool { _, err := os.Stat(filepath.Join(dir, "args.txt")); return err == nil })
 	args, _ := os.ReadFile(filepath.Join(dir, "args.txt"))
 	got := strings.Fields(string(args))
-	for _, want := range []string{"generate", "--first-frame-image", "--last-frame-image", "--megapixels", "--duration-seconds"} {
+	for _, want := range []string{"generate", "--first-frame-image", "--last-frame-image", "--megapixels", "--duration-seconds", "--output-dir"} {
 		if !strings.Contains(strings.Join(got, " "), want) {
 			t.Fatalf("args %v missing %s", got, want)
 		}
@@ -167,5 +173,25 @@ func TestH3CLIArgsRejectsMixedModes(t *testing.T) {
 	args, err := H3CLIArgs(H3CLIConfig{Megapixels: 0.5}, in, "p.txt", []string{"/a", "/b"})
 	if err != nil || strings.Count(strings.Join(args, " "), "--reference-image") != 2 || strings.Contains(strings.Join(args, " "), "frame-image") {
 		t.Fatalf("args %v err %v", args, err)
+	}
+}
+
+func TestH3CLIOutputWaitsForConfirmedStop(t *testing.T) {
+	dir := t.TempDir()
+	cli := filepath.Join(dir, "h3-cloud")
+	if err := os.WriteFile(cli, []byte("#!/bin/sh\necho '{\"status\":{\"state\":\"running\"}}'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "out.mp4")
+	if err := os.WriteFile(output, []byte("mp4"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &H3CLIProvider{Cfg: H3CLIConfig{Command: cli}, StoreOutput: func(context.Context, *VideoJob, string) (string, error) {
+		t.Fatal("output must not be published while GPU status is running")
+		return "", nil
+	}}
+	_, err := p.finish(context.Background(), &VideoJob{}, dir, output, PollResult{})
+	if !errors.Is(err, ErrResumeUnavailable) {
+		t.Fatalf("expected manual reconciliation, got %v", err)
 	}
 }
