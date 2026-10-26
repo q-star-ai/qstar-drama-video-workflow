@@ -94,6 +94,7 @@ func TestH3CLIRunRecordsPromptAndFinishes(t *testing.T) {
 	if strings.Contains(string(args), "--reference-image") {
 		t.Fatal("key-frame run also sent reference images")
 	}
+	waitFor(t, func() bool { id, _ := p.manifest(dir); return id != "" })
 	r.Step(ctx, job.ID)
 	j, _ := r.Store.GetJob(ctx, job.ID)
 	if j.Current().ExternalTaskID != "p-123" || j.Status != StatusRunning {
