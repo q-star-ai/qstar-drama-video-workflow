@@ -178,7 +178,7 @@ export function pendingAttempt(storage: AttemptStorage, base: string): string | 
 const ACTIVE = new Set(['queued', 'running', 'probing', 'needs_reconcile'])
 
 /** Jobs of this shot version and mode still in progress; a new one is a deliberate extra paid take. */
-export function activeJobsFor(jobs: JobView[], shotRevision: number, inputMode: string): JobView[] {
+export function activeJobsFor<J extends JobView>(jobs: J[], shotRevision: number, inputMode: string): J[] {
   return jobs.filter((j) => ACTIVE.has(j.status) && j.shot_spec_revision === shotRevision && j.request?.input_mode === inputMode)
 }
 
@@ -203,4 +203,40 @@ export function classifySubmitError(e: any): SubmitOutcome {
   }
   // The request interceptor rejects answered-but-unsuccessful responses with a plain Error.
   return { definitive: true, code, message }
+}
+
+export type SubmitCheck<J extends JobView = JobView> =
+  | { kind: 'blocked'; message: string }
+  | { kind: 'requery'; jobs: J[] }
+  | { kind: 'new'; jobs: J[]; active: J[] }
+
+const REFRESH_FAILED = '无法刷新本镜的任务列表。为避免漏掉其他页面已提交的任务，已停止提交，请稍后重试。'
+
+/**
+ * Re-reads the server's job list before a paid submit, so a stale tab cannot
+ * skip the "再生成一次" confirmation. If the list cannot be refreshed, the
+ * submit stops. An unconfirmed earlier submit is re-queried with its key.
+ */
+export async function checkBeforeSubmit<J extends JobView>(listJobs: () => Promise<J[]>, storage: AttemptStorage, base: string, shotRevision: number, inputMode: string): Promise<SubmitCheck<J>> {
+  let pending: string | null
+  try {
+    pending = pendingAttempt(storage, base)
+  } catch {
+    return { kind: 'blocked', message: '浏览器无法读取任务编号，为避免重复扣费已停止提交。' }
+  }
+  let jobs: J[]
+  try {
+    jobs = await listJobs()
+  } catch {
+    return { kind: 'blocked', message: REFRESH_FAILED }
+  }
+  if (!Array.isArray(jobs)) return { kind: 'blocked', message: REFRESH_FAILED }
+  if (pending) return { kind: 'requery', jobs }
+  return { kind: 'new', jobs, active: activeJobsFor(jobs, shotRevision, inputMode) }
+}
+
+/** In-progress jobs that appeared after the user acknowledged `seen`. */
+export function newActiveSince<J extends JobView>(seen: JobView[], now: J[]): J[] {
+  const ids = new Set(seen.map((j) => j.id))
+  return now.filter((j) => !ids.has(j.id))
 }

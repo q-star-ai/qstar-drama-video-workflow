@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { modeOptions, describeJob, idempotencyKey, reserveAttempt, releaseAttempt, pendingAttempt, activeJobsFor, classifySubmitError, type Capability, type ShotDraft, type JobView } from './videoJobForm.ts'
+import { modeOptions, describeJob, idempotencyKey, reserveAttempt, releaseAttempt, pendingAttempt, activeJobsFor, classifySubmitError, checkBeforeSubmit, newActiveSince, type Capability, type ShotDraft, type JobView } from './videoJobForm.ts'
 
 const h3: Capability = {
   provider: 'minimax-h3', model: 'h3-profile', enabled: true, fallback: true, verification_status: 'candidate',
@@ -111,4 +111,38 @@ test('4xx answers are definite; network errors, timeouts and 5xx are not', () =>
   assert.equal(classifySubmitError({ isAxiosError: true, code: 'ERR_NETWORK', message: 'Network Error' }).definitive, false)
   // The site interceptor turns a 200 with success:false into a plain Error.
   assert.equal(classifySubmitError(new Error('请求失败')).definitive, true)
+})
+
+test('submit decisions use a fresh server list; a failed refresh stops the submit', async () => {
+  const base = idempotencyKey('ep1', '7', 3, 'identity_refs')
+  const running = (id: string): JobView => ({ id, status: 'running', candidate_chain: [], attempts: [], fallbacks: [], shot_spec_revision: 3, request: { input_mode: 'identity_refs' } })
+  let calls = 0
+  // The tab's own list is empty (stale); the server already has a running take.
+  const fresh = await checkBeforeSubmit(async () => { calls++; return [running('other-tab')] }, memoryStorage(), base, 3, 'identity_refs')
+  assert.equal(calls, 1)
+  assert.equal(fresh.kind, 'new')
+  assert.equal(fresh.kind === 'new' && fresh.active.length, 1)
+
+  const failed = await checkBeforeSubmit(async () => { throw new Error('Network Error') }, memoryStorage(), base, 3, 'identity_refs')
+  assert.equal(failed.kind, 'blocked')
+  assert.match(failed.kind === 'blocked' ? failed.message : '', /已停止提交/)
+  const garbage = await checkBeforeSubmit(async () => ({}) as unknown as JobView[], memoryStorage(), base, 3, 'identity_refs')
+  assert.equal(garbage.kind, 'blocked')
+
+  // An unconfirmed earlier submit is re-queried with its key, never a new take.
+  const store = memoryStorage()
+  reserveAttempt(store, base, () => 'uuid-1')
+  const requery = await checkBeforeSubmit(async () => [running('other-tab')], store, base, 3, 'identity_refs')
+  assert.equal(requery.kind, 'requery')
+
+  const broken = { getItem: () => { throw new Error('denied') }, setItem: () => {}, removeItem: () => {} }
+  let listed = false
+  const blocked = await checkBeforeSubmit(async () => { listed = true; return [] }, broken, base, 3, 'identity_refs')
+  assert.deepEqual([blocked.kind, listed], ['blocked', false])
+})
+
+test('a take submitted while the dialog was open is detected', () => {
+  const job = (id: string): JobView => ({ id, status: 'running', candidate_chain: [], attempts: [], fallbacks: [] })
+  assert.deepEqual(newActiveSince([job('a')], [job('a'), job('b')]).map((j) => j.id), ['b'])
+  assert.equal(newActiveSince([job('a'), job('b')], [job('b')]).length, 0)
 })
