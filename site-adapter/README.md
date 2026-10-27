@@ -31,6 +31,8 @@ cd site-adapter
 go vet ./... && go test ./...                       # Postgres 测试未设 DSN 时跳过
 QSTAR_TEST_PG_DSN=postgres://user@127.0.0.1:5432/scratch?sslmode=disable go test ./...  # 已迁移的临时库
 node --experimental-strip-types --test web/videoJobForm.test.ts
+# 隔离验收（全部合成：临时 Postgres、生成的媒体、假通道、假 h3-cloud、可控时钟；不连真实模型/GPU/生产库）
+QSTAR_TEST_PG_DSN=postgres://user@127.0.0.1:5432/scratch?sslmode=disable go test -tags acceptance -race -run Acceptance -v ./videojob
 ```
 
 所有测试使用假 provider/假 H3 运行时，不调用真实模型，不产生费用。

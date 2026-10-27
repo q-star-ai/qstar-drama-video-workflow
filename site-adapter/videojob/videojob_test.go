@@ -426,3 +426,62 @@ func TestRedactForLog(t *testing.T) {
 		t.Fatalf("length %d runes", n)
 	}
 }
+
+// The site records who confirmed a technical failure of an ambiguous provider
+// attempt (and the evidence) in these fields; probe reviews use Probe*.
+func TestReconcileReviewFieldsSerialize(t *testing.T) {
+	req, _ := BuildRequest(sampleShot(ModeIdentityRefs))
+	j := NewJob("job-rr", "k-rr", req, []Capability{doubaoCap()}, 0, time.Unix(0, 0))
+	empty, _ := json.Marshal(j)
+	if strings.Contains(string(empty), "reconcile_review") {
+		t.Fatalf("empty review fields serialized: %s", empty)
+	}
+	j.ReconcileReviewedBy, j.ReconcileReviewNote = "user:7", "供应商后台无该任务记录，截图已存档"
+	data, err := json.Marshal(j)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"reconcile_reviewed_by":"user:7"`, `"reconcile_review_note":"供应商后台无该任务记录，截图已存档"`} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("missing %s in %s", want, data)
+		}
+	}
+	var back VideoJob
+	if err := json.Unmarshal(data, &back); err != nil || back.ReconcileReviewedBy != "user:7" || back.ReconcileReviewNote != j.ReconcileReviewNote {
+		t.Fatalf("round trip: %+v %v", back, err)
+	}
+	store := NewMemStore()
+	store.CreateJob(context.Background(), j)
+	got, _ := store.GetJob(context.Background(), j.ID)
+	if got.ReconcileReviewedBy != "user:7" || got.ReconcileReviewNote != j.ReconcileReviewNote {
+		t.Fatalf("store round trip: %+v", got)
+	}
+}
+
+// Attaching a task ID or resubmitting is not a technical-failure confirmation:
+// ResolveReconcile must not set or clear the review fields.
+func TestResolveReconcileLeavesReconcileReviewUntouched(t *testing.T) {
+	for _, ext := range []string{"found-1", ""} {
+		req, _ := BuildRequest(sampleShot(ModeIdentityRefs))
+		j := NewJob("job-rc", "k-rc", req, []Capability{doubaoCap()}, 0, time.Unix(0, 0))
+		j.Status = StatusNeedsReconcile
+		j.Attempts = []Attempt{{Provider: "doubao", Status: AttemptSubmitting}}
+		if err := ResolveReconcile(j, ext); err != nil {
+			t.Fatal(err)
+		}
+		if j.ReconcileReviewedBy != "" || j.ReconcileReviewNote != "" {
+			t.Fatalf("ResolveReconcile(%q) set review fields: %+v", ext, j)
+		}
+		j.Status = StatusNeedsReconcile
+		j.Attempts[0].Status = AttemptRunning
+		j.ReconcileReviewedBy, j.ReconcileReviewNote = "user:7", "earlier note"
+		if ext != "" {
+			if err := ResolveReconcile(j, ext); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if j.ReconcileReviewedBy != "user:7" || j.ReconcileReviewNote != "earlier note" {
+			t.Fatalf("ResolveReconcile(%q) changed existing review fields: %+v", ext, j)
+		}
+	}
+}

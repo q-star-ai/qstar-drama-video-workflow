@@ -123,25 +123,27 @@ type QCResult struct {
 
 // VideoJob is one shot generation, possibly across several providers.
 type VideoJob struct {
-	ID              string          `json:"id"`
-	IdempotencyKey  string          `json:"idempotency_key"`
-	Revision        int             `json:"revision"`
-	Request         Request         `json:"request"`
-	Chain           []Capability    `json:"candidate_chain"`
-	ChainIndex      int             `json:"chain_index"`
-	Status          Status          `json:"status"`
-	StatusReason    string          `json:"status_reason,omitempty"`
-	CostCapMicroUSD int64           `json:"cost_cap_micro_usd"`
-	Attempts        []Attempt       `json:"attempts"`
-	Fallbacks       []FallbackEvent `json:"fallbacks"`
-	Output          *Output         `json:"output,omitempty"`
-	QC              *QCResult       `json:"qc,omitempty"`
-	ProbeAttempts   int             `json:"probe_attempts,omitempty"`
-	ProbeNextAt     *time.Time      `json:"probe_next_at,omitempty"`
-	ProbeErrorKind  string          `json:"probe_error_kind,omitempty"`
-	ProbeOutputURI  string          `json:"probe_output_uri,omitempty"`
-	ProbeReviewedBy string          `json:"probe_reviewed_by,omitempty"`
-	ProbeReviewNote string          `json:"probe_review_note,omitempty"`
+	ID                  string          `json:"id"`
+	IdempotencyKey      string          `json:"idempotency_key"`
+	Revision            int             `json:"revision"`
+	Request             Request         `json:"request"`
+	Chain               []Capability    `json:"candidate_chain"`
+	ChainIndex          int             `json:"chain_index"`
+	Status              Status          `json:"status"`
+	StatusReason        string          `json:"status_reason,omitempty"`
+	CostCapMicroUSD     int64           `json:"cost_cap_micro_usd"`
+	Attempts            []Attempt       `json:"attempts"`
+	Fallbacks           []FallbackEvent `json:"fallbacks"`
+	Output              *Output         `json:"output,omitempty"`
+	QC                  *QCResult       `json:"qc,omitempty"`
+	ProbeAttempts       int             `json:"probe_attempts,omitempty"`
+	ProbeNextAt         *time.Time      `json:"probe_next_at,omitempty"`
+	ProbeErrorKind      string          `json:"probe_error_kind,omitempty"`
+	ProbeOutputURI      string          `json:"probe_output_uri,omitempty"`
+	ProbeReviewedBy     string          `json:"probe_reviewed_by,omitempty"`
+	ProbeReviewNote     string          `json:"probe_review_note,omitempty"`
+	ReconcileReviewedBy string          `json:"reconcile_reviewed_by,omitempty"`
+	ReconcileReviewNote string          `json:"reconcile_review_note,omitempty"`
 	// ProbeLog keeps the most recent probe failures (exit code and a
 	// redacted, truncated message) as evidence for the reviewer.
 	ProbeLog []ProbeFailure `json:"probe_log,omitempty"`
