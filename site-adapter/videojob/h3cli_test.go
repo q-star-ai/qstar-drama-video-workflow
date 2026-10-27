@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -195,4 +196,92 @@ func TestH3CLIOutputWaitsForConfirmedStop(t *testing.T) {
 	if !errors.Is(err, ErrResumeUnavailable) {
 		t.Fatalf("expected manual reconciliation, got %v", err)
 	}
+}
+
+// testClock is safe to read from the goroutine that records the CLI exit.
+type testClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *testClock) Now() time.Time  { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *testClock) Set(t time.Time) { c.mu.Lock(); c.t = t; c.mu.Unlock() }
+
+func useClock(p *H3CLIProvider, r *Runner, c *testClock) {
+	p.Now, r.Now = c.Now, c.Now
+}
+
+func TestH3CLICostCountsOnlyProcessLifetime(t *testing.T) {
+	p, job, r, dir := h3Fixture(t) // 3_600_000 micro-USD per hour = 1_000 per second
+	clock := &testClock{t: time.Unix(10_000, 0)}
+	useClock(p, r, clock)
+	ctx := context.Background()
+	start := clock.Now()
+	r.Step(ctx, job.ID)
+	waitFor(t, func() bool { id, _ := p.manifest(dir); return id != "" })
+
+	clock.Set(start.Add(10 * time.Minute))
+	r.Step(ctx, job.ID)
+	if c := f3Cost(t, r, job.ID); c != 600_000 {
+		t.Fatalf("running cost after 10m = %d, want 600000", c)
+	}
+
+	// The process exits at +20m; the next poll happens hours later.
+	clock.Set(start.Add(20 * time.Minute))
+	os.WriteFile(filepath.Join(dir, "release.txt"), nil, 0o600)
+	waitFor(t, func() bool { _, out := p.manifest(dir); return out != "" })
+	time.Sleep(150 * time.Millisecond)
+	clock.Set(start.Add(5 * time.Hour))
+	r.Step(ctx, job.ID)
+	j, _ := r.Store.GetJob(ctx, job.ID)
+	if j.Status != StatusProbing {
+		t.Fatalf("status %s (%s)", j.Status, j.StatusReason)
+	}
+	if c := j.Current(); c.CostMicroUSD != 1_200_000 || c.GPUSeconds != 1200 || !c.CostEstimated {
+		t.Fatalf("cost after exit = %d (%vs), want 1200000 (1200s)", c.CostMicroUSD, c.GPUSeconds)
+	}
+}
+
+func TestH3CLICostDoesNotGrowAfterRestartOrReview(t *testing.T) {
+	p, job, r, dir := h3Fixture(t)
+	clock := &testClock{t: time.Unix(10_000, 0)}
+	useClock(p, r, clock)
+	ctx := context.Background()
+	start := clock.Now()
+	r.Step(ctx, job.ID)
+	waitFor(t, func() bool { id, _ := p.manifest(dir); return id != "" })
+	clock.Set(start.Add(10 * time.Minute))
+	r.Step(ctx, job.ID)
+
+	// Worker restart: the new process does not know the run.
+	fresh := &H3CLIProvider{Cfg: p.Cfg, Fetch: p.Fetch, StoreOutput: p.StoreOutput, Now: clock.Now}
+	r2 := &Runner{Store: r.Store, Providers: map[string]Provider{"minimax-h3": fresh}, Now: clock.Now}
+	clock.Set(start.Add(3 * time.Hour))
+	r2.Step(ctx, job.ID)
+	j, _ := r2.Store.GetJob(ctx, job.ID)
+	if j.Status != StatusNeedsReconcile || j.Current().CostMicroUSD != 600_000 {
+		t.Fatalf("after restart status=%s cost=%d, want needs_reconcile 600000", j.Status, j.Current().CostMicroUSD)
+	}
+	// An operator re-attaches the prompt hours later; polling again must not inflate the cost.
+	if err := ResolveReconcile(j, j.Current().ExternalTaskID); err != nil {
+		t.Fatal(err)
+	}
+	if err := r2.Store.SaveJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	clock.Set(start.Add(9 * time.Hour))
+	r2.Step(ctx, job.ID)
+	if c := f3Cost(t, r2, job.ID); c != 600_000 {
+		t.Fatalf("cost after operator re-poll = %d, want 600000", c)
+	}
+	os.WriteFile(filepath.Join(dir, "release.txt"), nil, 0o600)
+}
+
+func f3Cost(t *testing.T, r *Runner, id string) int64 {
+	t.Helper()
+	j, err := r.Store.GetJob(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return j.Current().CostMicroUSD
 }

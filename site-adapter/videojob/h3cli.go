@@ -52,6 +52,10 @@ type h3Run struct {
 	done   chan struct{}
 	err    error
 	stderr bytes.Buffer
+	// startedAt and endedAt bound the CLI process, the only time this
+	// worker can attribute to the GPU. endedAt is written before done closes.
+	startedAt time.Time
+	endedAt   time.Time
 }
 
 func (p *H3CLIProvider) ID() string { return "minimax-h3" }
@@ -98,7 +102,9 @@ func H3CLIArgs(cfg H3CLIConfig, in H3Input, promptFile string, imagePaths []stri
 }
 
 func (p *H3CLIProvider) start(dir string, args []string) {
-	run := &h3Run{cmd: exec.Command(p.Cfg.Command, args...), done: make(chan struct{})}
+	// startedAt is set before the run is published under p.mu, so pollers on
+	// other goroutines read it safely.
+	run := &h3Run{cmd: exec.Command(p.Cfg.Command, args...), done: make(chan struct{}), startedAt: p.now()}
 	run.cmd.Dir = dir
 	run.cmd.Stderr = &run.stderr
 	if log, err := os.Create(filepath.Join(dir, "stdout.log")); err == nil {
@@ -117,6 +123,7 @@ func (p *H3CLIProvider) start(dir string, args []string) {
 	}
 	go func() {
 		run.err = run.cmd.Wait()
+		run.endedAt = p.now()
 		if f, ok := run.cmd.Stdout.(*os.File); ok {
 			f.Close()
 		}
@@ -201,8 +208,23 @@ func (p *H3CLIProvider) manifest(dir string) (promptID, output string) {
 	return promptID, output
 }
 
-func (p *H3CLIProvider) cost(att *Attempt) (int64, float64) {
-	secs := p.now().Sub(att.StartedAt).Seconds()
+// runCost estimates GPU cost from the CLI process lifetime only: asset
+// downloads before the start and any time after the process exited (or
+// while a job waits for an operator) are not counted. Without a run known
+// to this worker (after a restart) it reports nothing, so the runner keeps
+// the cost already recorded instead of growing it with the wall clock.
+func (p *H3CLIProvider) runCost(run *h3Run, finished bool) (int64, float64) {
+	if run == nil || run.startedAt.IsZero() || (finished && run.endedAt.IsZero()) {
+		return 0, 0
+	}
+	end := p.now()
+	if finished {
+		end = run.endedAt
+	}
+	secs := end.Sub(run.startedAt).Seconds()
+	if secs < 0 {
+		secs = 0
+	}
 	return int64(secs * float64(p.Cfg.HourlyRateMicroUSD) / 3600), secs
 }
 
@@ -224,9 +246,7 @@ func (p *H3CLIProvider) stopEvidence(ctx context.Context, dir string) bool {
 // Poll follows the local run (or a resumed one); it never starts `generate`.
 func (p *H3CLIProvider) Poll(ctx context.Context, job *VideoJob, att *Attempt) (PollResult, error) {
 	dir := p.runDir(job)
-	res := PollResult{}
-	res.CostMicroUSD, res.GPUSeconds = p.cost(att)
-	res.CostEstimated = true
+	res := PollResult{CostEstimated: true}
 	promptID, output := p.manifest(dir)
 	if promptID != "" {
 		att.ExternalTaskID = promptID
@@ -244,7 +264,9 @@ func (p *H3CLIProvider) Poll(ctx context.Context, job *VideoJob, att *Attempt) (
 
 	select {
 	case <-run.done:
+		res.CostMicroUSD, res.GPUSeconds = p.runCost(run, true)
 	default:
+		res.CostMicroUSD, res.GPUSeconds = p.runCost(run, false)
 		if p.Cfg.MaxRuntime > 0 && p.now().Sub(att.StartedAt) > p.Cfg.MaxRuntime {
 			// Killing the CLI could leave the GPU running; hand it to a person.
 			return res, fmt.Errorf("%w: run %s exceeded %s; check the instance before acting", ErrResumeUnavailable, dir, p.Cfg.MaxRuntime)
