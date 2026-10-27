@@ -10,7 +10,7 @@
 ./install.sh
 ```
 
-安装器为当前用户的 Codex、Claude Code、OpenCode 技能目录创建指向本仓库 Skill 的软链，不覆盖已有技能。云端 agent 克隆同一仓库后也运行该命令，再重开 agent 会话使技能目录更新生效。
+安装器为当前用户的 Codex、Claude Code、OpenCode、OpenClaw 技能目录创建指向本仓库 Skill 的软链，不覆盖已有技能。云端 agent 克隆同一仓库后也运行该命令，再重开 agent 会话使技能目录更新生效。在本仓库内工作的 agent 无需安装：`.claude/skills/` 与 `.agents/skills/` 已指向同一 Skill。
 
 ## 使用
 
@@ -22,7 +22,7 @@ python3 skills/qstar-drama-video/scripts/drama_workflow.py prompt skills/qstar-d
 python3 skills/qstar-drama-video/scripts/drama_workflow.py plan skills/qstar-drama-video/examples/episode.json 01 skills/qstar-drama-video/examples/providers.json
 ```
 
-`plan` 只输出符合输入能力的候选通道。示例 `providers.json` 是能力形状演示，模型版本、可用库存、价格和身份一致性效果都需要在实际环境核实。生产网站的接入任务见 [站点接入说明](skills/qstar-drama-video/references/site-integration.md)。
+`plan` 只输出符合输入能力的候选通道。示例 `providers.json` 是能力形状演示，模型版本、可用库存、价格和身份一致性效果都需要在实际环境核实。生产网站的接入任务见 [站点接入说明](skills/qstar-drama-video/references/site-integration.md)，统一视频任务实现见 [site-adapter](site-adapter/README.md)。
 
 CozyClay 预演思路来自 [NomaDamas/CozyClay](https://github.com/NomaDamas/CozyClay)。本仓库没有复制或修改其代码，CozyClay 自身使用 AGPL-3.0-or-later。
 

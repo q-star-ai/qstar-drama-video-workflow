@@ -19,6 +19,8 @@
     "max_seconds": 15,
     "aspect_ratios": ["9:16", "16:9", "1:1"],
     "max_reference_images": 9,
-    "verification_status": "candidate"
+    "verification_status": "candidate",
+    "fallback": true,
+    "notes": "identity_refs and first_last are mutually exclusive; no greybox video input (no video_ref)"
   }
 ]
