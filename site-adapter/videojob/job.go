@@ -90,6 +90,14 @@ type Output struct {
 	Unplayable      bool     `json:"unplayable,omitempty"` // confirmed no readable video, distinct from format mismatch
 }
 
+// ProbeFailure is one failed automatic probe or output transfer.
+type ProbeFailure struct {
+	At       time.Time `json:"at"`
+	Kind     string    `json:"kind"`
+	ExitCode int       `json:"exit_code"` // -1 when the tool did not exit (timeout, not started, transfer)
+	Message  string    `json:"message"`
+}
+
 // QC failure codes shared with the Skill's character-consistency reference.
 const (
 	QCFaceDrift     = "face_drift"
@@ -134,6 +142,11 @@ type VideoJob struct {
 	ProbeOutputURI  string          `json:"probe_output_uri,omitempty"`
 	ProbeReviewedBy string          `json:"probe_reviewed_by,omitempty"`
 	ProbeReviewNote string          `json:"probe_review_note,omitempty"`
+	// ProbeLog keeps the most recent probe failures (exit code and a
+	// redacted, truncated message) as evidence for the reviewer.
+	ProbeLog []ProbeFailure `json:"probe_log,omitempty"`
+	// ShotSpecRevision is the shot spec version the user confirmed.
+	ShotSpecRevision int `json:"shot_spec_revision,omitempty"`
 	// LegacyVideoGenerationID links the site's existing VideoGeneration row.
 	LegacyVideoGenerationID string    `json:"legacy_video_generation_id,omitempty"`
 	CreatedAt               time.Time `json:"created_at"`

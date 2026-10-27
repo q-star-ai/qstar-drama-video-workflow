@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // ParseFFprobe reads `ffprobe -v error -print_format json -show_format
@@ -74,4 +76,17 @@ func CheckOutput(req Request, out Output, requireAudio bool) Output {
 		out.ProbeFailures = append(out.ProbeFailures, "no audio stream")
 	}
 	return out
+}
+
+var urlQueryRe = regexp.MustCompile(`((?:https?|rtmp)://[^\s?#"'<>]+)[?#][^\s"'<>]*`)
+
+// RedactForLog strips query strings and fragments from URLs (signed links
+// carry their credentials there) and truncates to maxRunes.
+func RedactForLog(msg string, maxRunes int) string {
+	msg = strings.TrimSpace(urlQueryRe.ReplaceAllString(msg, "$1?[redacted]"))
+	if utf8.RuneCountInString(msg) > maxRunes {
+		r := []rune(msg)
+		msg = string(r[:maxRunes])
+	}
+	return msg
 }

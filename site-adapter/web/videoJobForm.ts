@@ -106,6 +106,9 @@ export type JobView = {
   fallbacks: { from: string; to: string; class: string; reason: string }[]
   output?: { duration_seconds: number; width: number; height: number; has_audio: boolean; probe_failures?: string[]; unplayable?: boolean }
   qc?: { passed: boolean; failures?: string[]; reviewer: string }
+  shot_spec_revision?: number
+  request?: { input_mode?: string }
+  probe_log?: { at: string; kind: string; exit_code: number; message: string }[]
 }
 
 /** Status line for the shot card. "完成" only for a probed, QC-passed file. */
@@ -165,4 +168,39 @@ export async function createJob(base: string, shot: unknown, key: string, fetchI
   })
   if (!res.ok) throw new Error((await res.json()).error ?? `HTTP ${res.status}`)
   return res.json()
+}
+
+/** The earlier submit for this shot version whose result was never confirmed, if any. */
+export function pendingAttempt(storage: AttemptStorage, base: string): string | null {
+  return storage.getItem(`qstar.videojob.pending:${base}`)
+}
+
+const ACTIVE = new Set(['queued', 'running', 'probing', 'needs_reconcile'])
+
+/** Jobs of this shot version and mode still in progress; a new one is a deliberate extra paid take. */
+export function activeJobsFor(jobs: JobView[], shotRevision: number, inputMode: string): JobView[] {
+  return jobs.filter((j) => ACTIVE.has(j.status) && j.shot_spec_revision === shotRevision && j.request?.input_mode === inputMode)
+}
+
+export type SubmitOutcome = { definitive: boolean; status?: number; code?: string; message: string }
+
+/**
+ * Whether a failed create call has a known result. A 4xx (or a 2xx the site
+ * marked unsuccessful) means the server answered and nothing was created;
+ * network errors, timeouts and 5xx leave the result unknown, so the same key
+ * must be reused.
+ */
+export function classifySubmitError(e: any): SubmitOutcome {
+  const status: number | undefined = e?.response?.status
+  const code: string | undefined = e?.businessCode ?? e?.response?.data?.error?.code
+  const message: string = e?.response?.data?.error?.message || e?.message || '提交失败'
+  if (status !== undefined) {
+    return status >= 400 && status < 500 ? { definitive: true, status, code, message } : { definitive: false, status, code, message }
+  }
+  // Axios errors without a response are network failures or timeouts.
+  if (e?.isAxiosError || e?.code === 'ECONNABORTED' || e?.code === 'ERR_NETWORK' || e?.name === 'AbortError') {
+    return { definitive: false, code, message }
+  }
+  // The request interceptor rejects answered-but-unsuccessful responses with a plain Error.
+  return { definitive: true, code, message }
 }

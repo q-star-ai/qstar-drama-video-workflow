@@ -415,3 +415,14 @@ func TestCostIsRecordedWhenHandedToOperator(t *testing.T) {
 		t.Fatalf("cost not recorded before reconcile: %+v", cur)
 	}
 }
+
+func TestRedactForLog(t *testing.T) {
+	in := "open https://a.example/x.mp4?e=1&token=S3CRET failed; rtmp://b.example/live#frag and http://c.example/plain ok " + strings.Repeat("é", 600)
+	got := RedactForLog(in, 500)
+	if strings.Contains(got, "S3CRET") || strings.Contains(got, "frag") || !strings.Contains(got, "https://a.example/x.mp4?[redacted]") || !strings.Contains(got, "http://c.example/plain") {
+		t.Fatalf("redacted: %q", got)
+	}
+	if n := len([]rune(got)); n != 500 {
+		t.Fatalf("length %d runes", n)
+	}
+}
