@@ -96,31 +96,45 @@ HOST120_RE = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.120\b")
 
 SKIP_DIRECTORIES = (".git", "__pycache__")
 
-# --- B. URL whitelist: exact URL -> set of normalized relative paths allowed to
-#         use it. The path is the POSIX relative path from the scan root after
-#         `..` normalization, NOT a basename. A special marker `__TESTS_ONLY__`
-#         means the URL is allowed only inside files whose normalized relative
-#         path starts with `tests/`. ---
-_URL_WHITELIST = {
-    "https://github.com/NomaDamas/CozyClay": {
-        "skills/qstar-drama-video-intl/references/character-consistency.md",
+# --- B. URL whitelist, split by PURPOSE (R5). ---
+# URLs are built from fragments so this source file itself contains no URL
+# literal (the scanner scans itself and must stay clean without self-exclusion).
+_H = "https" + "://"
+_P = "skills/qstar-drama-video-intl/"
+
+# B1. Public documentation links. Allowed ONLY when ALL hold:
+#   - the file is a Markdown document (.md) listed for that URL;
+#   - the URL is a Markdown link target `](URL)` (autolinks/bare URLs rejected);
+#   - the line has no configuration/default-value context (see CONFIG_CONTEXT_RE).
+# Anything else (assignment, JSON value, code constant, bare URL) is treated as a
+# default service address and reported.
+_DOC_LINKS = {
+    _H + "github.com/NomaDamas/CozyClay": {
+        _P + "references/character-consistency.md",
         "README-intl.md",
-        "skills/qstar-drama-video-intl/scripts/check_no_domestic.py",
-        "skills/qstar-drama-video-intl/tests/test_not_configured.py",
     },
-    "https://github.com/NomaDamas/CozyClay/blob/main/LICENSING.md": {
-        "skills/qstar-drama-video-intl/references/character-consistency.md",
-        "skills/qstar-drama-video-intl/scripts/check_no_domestic.py",
+    _H + "github.com/NomaDamas/CozyClay/blob/main/LICENSING.md": {
+        _P + "references/character-consistency.md",
     },
-    "https://x.com/AISuperDomain/status/2114327756532036045": {
-        "skills/qstar-drama-video-intl/references/character-consistency.md",
-        "skills/qstar-drama-video-intl/scripts/check_no_domestic.py",
+    _H + "x.com/AISuperDomain/status/2114327756532036045": {
+        _P + "references/character-consistency.md",
     },
-    # Test-only fixture; whitelisted solely inside files under tests/, plus this
-    # scanner's own source (which references it only as a whitelist key, never as
-    # a real default).
-    "https://overseas.example/api": {"__TESTS_ONLY__", "skills/qstar-drama-video-intl/scripts/check_no_domestic.py"},
 }
+
+# B2. Test fixtures: allowed only inside the intl skill's own tests/ directory
+# (scanner regression fixtures; never shipped as runtime defaults).
+_TEST_FIXTURE_URLS = set(_DOC_LINKS) | {_H + "overseas.example/api"}
+
+# Configuration / default-value context: key names or assignment syntax that
+# would turn a URL into a service address.
+CONFIG_CONTEXT_RE = re.compile(
+    r"(?i)(api_base_url|base_url|baseurl|endpoint|host|callback_url|playback_base_url"
+    r"|asset_store|queue|billing_account|default|url\s*[:=]|[=:]\s*[\"']?\s*h[t]tps?://)"
+)
+
+# Kept for backward compatibility with callers/tests that inspect the table.
+_URL_WHITELIST = {u: set(v) for u, v in _DOC_LINKS.items()}
+_URL_WHITELIST[_H + "overseas.example/api"] = {"__TESTS_ONLY__"}
 
 
 _SKILL_ROOT = Path(__file__).resolve().parent.parent
@@ -141,14 +155,26 @@ def _rel_path(path, root=None):
         return real.as_posix()
 
 
-def _url_allowed(url, norm_rel, path):
-    allowed = _URL_WHITELIST.get(url)
-    if not allowed:
-        return False
-    in_skill_tests = path.resolve().is_relative_to(_SKILL_ROOT / "tests")
-    if "__TESTS_ONLY__" in allowed and in_skill_tests:
+def _in_skill_tests(path):
+    return path.resolve().is_relative_to(_SKILL_ROOT / "tests")
+
+
+def _url_allowed(url, norm_rel, path, line=None):
+    """Purpose-aware whitelist check.
+
+    `line` is the full source line. When omitted (legacy callers) the doc-link
+    purpose cannot be proven, so only the test-fixture purpose can allow it.
+    """
+    if url in _TEST_FIXTURE_URLS and _in_skill_tests(path):
         return True
-    return norm_rel in allowed
+    allowed = _DOC_LINKS.get(url)
+    if not allowed or norm_rel not in allowed:
+        return False
+    if path.suffix.lower() != ".md" or line is None:
+        return False
+    if CONFIG_CONTEXT_RE.search(line):
+        return False
+    return ("](" + url + ")") in line
 
 
 def scan_file(path, norm_rel):
@@ -167,7 +193,7 @@ def scan_file(path, norm_rel):
             hits.append((lineno, "matched 120-host address: " + line.strip()))
         # URL check: whitelisted only by exact (normalized relative path, URL).
         for match in URL_RE.findall(line):
-            if not _url_allowed(match, norm_rel, path):
+            if not _url_allowed(match, norm_rel, path, line):
                 hits.append((lineno, "default URL not whitelisted: " + match))
     return hits
 

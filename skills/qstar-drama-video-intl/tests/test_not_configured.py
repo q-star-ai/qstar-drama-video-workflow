@@ -378,7 +378,65 @@ class ScannerRootCollisionTest(unittest.TestCase):
             self.assertFalse(mod._url_allowed(url, mod._rel_path(p), p), fake)
             self.assertFalse(mod._url_allowed("https://overseas.example/api", mod._rel_path(p), p), fake)
         real = REPO_ROOT / "references" / "character-consistency.md"
-        self.assertTrue(mod._url_allowed(url, mod._rel_path(real), real))
+        doc_line = "See [CozyClay](" + url + ")."
+        self.assertTrue(mod._url_allowed(url, mod._rel_path(real), real, doc_line))
+
+
+class ScannerUrlPurposeTest(unittest.TestCase):
+    """R5: whitelisted doc links pass only as Markdown doc links, never as config/defaults."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cnd_purpose", SCANNER)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+        cls.repo = REPO_ROOT.parent.parent
+        cls.url = "https" + "://github.com/NomaDamas/CozyClay"
+
+    def _hits(self, path, line):
+        mod = self.mod
+        return [d for d in [line] for m in mod.URL_RE.findall(d)
+                if not mod._url_allowed(m, mod._rel_path(path), path, d)]
+
+    def test_readme_config_assignment_with_doc_url_is_reported(self):
+        readme = self.repo / "README-intl.md"
+        for line in ('api_base_url="' + self.url + '"',
+                     '"endpoint": "' + self.url + '"',
+                     'base_url: ' + self.url,
+                     'host = ' + self.url,
+                     'Default: [x](' + self.url + ')',
+                     self.url):
+            self.assertTrue(self._hits(readme, line), line)
+
+    def test_legit_markdown_doc_links_pass(self):
+        readme = self.repo / "README-intl.md"
+        ref = REPO_ROOT / "references" / "character-consistency.md"
+        self.assertFalse(self._hits(readme, "The idea comes from [NomaDamas/CozyClay](" + self.url + ")."))
+        # Autolinks/bare URLs are NOT accepted as doc purpose (strict).
+        self.assertTrue(self._hits(readme, "Project: <" + self.url + ">"))
+        lic = self.url + "/blob/main/LICENSING.md"
+        self.assertFalse(self._hits(ref, "[its licensing note](" + lic + ")"))
+
+    def test_doc_link_in_non_md_file_is_reported(self):
+        p = REPO_ROOT / "scripts" / "drama_workflow.py"
+        self.assertTrue(self._hits(p, "# see [x](" + self.url + ")"))
+
+    def test_real_readme_via_cli_is_clean_and_injected_readme_reported(self):
+        import shutil, tempfile
+        readme = self.repo / "README-intl.md"
+        proc = subprocess.run([sys.executable, str(SCANNER), str(readme)], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stdout)
+        backup = tempfile.mktemp()
+        shutil.copy2(readme, backup)
+        try:
+            with open(readme, "a", encoding="utf-8") as fh:
+                fh.write('\napi_base_url="' + self.url + '"\n')
+            proc = subprocess.run([sys.executable, str(SCANNER), str(readme)], capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 1, proc.stdout)
+            self.assertIn("default URL not whitelisted", proc.stdout)
+        finally:
+            shutil.move(backup, readme)
 
 
 if __name__ == "__main__":
