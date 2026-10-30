@@ -347,3 +347,19 @@ class ScannerWhitelistTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ScannerInvocationIndependenceTest(unittest.TestCase):
+    """Whitelist lookup must not depend on scan arguments or cwd (R3 follow-up)."""
+
+    def test_same_result_for_file_arg_dir_arg_and_other_cwd(self):
+        repo = REPO_ROOT.parent.parent
+        readme = repo / "README-intl.md"
+        runs = [
+            ([sys.executable, str(SCANNER), str(readme)], str(repo)),
+            ([sys.executable, str(SCANNER), "README-intl.md"], str(repo)),
+            ([sys.executable, str(SCANNER), str(REPO_ROOT), str(readme)], "/"),
+        ]
+        for cmd, cwd in runs:
+            proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+            self.assertEqual(proc.returncode, 0, (cmd, cwd, proc.stdout))

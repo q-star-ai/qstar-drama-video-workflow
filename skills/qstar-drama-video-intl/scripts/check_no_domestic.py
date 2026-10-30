@@ -123,31 +123,34 @@ _URL_WHITELIST = {
 }
 
 
-def _rel_path(path, root):
-    """Normalized POSIX relative path of `path` from `root` (resolves `..`).
+_SKILL_ROOT = Path(__file__).resolve().parent.parent
+_REPO_ROOT = _SKILL_ROOT.parent.parent
 
-    `root` is the original scan root requested on the command line, so a single
-    file such as `tests/_tmp.py` keeps its `tests/` prefix regardless of whether
-    it is scanned as a file argument or discovered under a directory root.
+
+def _rel_path(path, root=None):
+    """Normalized POSIX path used for whitelist lookup, anchored at FIXED roots.
+
+    The result does not depend on the scan arguments or the cwd: files inside
+    the intl skill map to skill-relative paths (e.g. `tests/x.py`), other files
+    inside the repo map to repo-relative paths (e.g. `README-intl.md`), and
+    anything outside the repo maps to its absolute path (never whitelisted).
+    `root` is accepted for call compatibility and ignored.
     """
-    resolved_root = root.resolve()
-    try:
-        rel = path.resolve().relative_to(resolved_root)
-    except ValueError:
-        # Outside root: use the full resolved path so it never matches a
-        # repo-relative whitelist entry.
-        rel = path.resolve()
-    rel = Path(*[p for p in rel.parts if p != ".."])
-    return rel.as_posix()
+    real = path.resolve()
+    for anchor in (_SKILL_ROOT, _REPO_ROOT):
+        try:
+            return real.relative_to(anchor).as_posix()
+        except ValueError:
+            continue
+    return real.as_posix()
 
 
 def _url_allowed(url, norm_rel, path):
     allowed = _URL_WHITELIST.get(url)
     if not allowed:
         return False
-    if "__TESTS_ONLY__" in allowed and "tests" in path.resolve().parts:
-        # A file is "in tests" only when its real path contains a `tests`
-        # directory component (tests/../config/service.py is NOT in tests).
+    in_skill_tests = path.resolve().is_relative_to(_SKILL_ROOT / "tests")
+    if "__TESTS_ONLY__" in allowed and in_skill_tests:
         return True
     return norm_rel in allowed
 
