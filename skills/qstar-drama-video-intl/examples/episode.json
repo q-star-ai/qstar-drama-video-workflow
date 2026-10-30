@@ -1,0 +1,34 @@
+{
+  "episode_id": "example-episode-01",
+  "assets": {
+    "lead-face": {"role": "identity", "uri": "asset://approved/lead-face"},
+    "lead-office": {"role": "wardrobe", "uri": "asset://approved/lead-office"},
+    "office-set": {"role": "environment", "uri": "asset://approved/office-set"},
+    "shot-01-first": {"role": "first_frame", "uri": "asset://previs/shot-01-first"},
+    "shot-01-last": {"role": "last_frame", "uri": "asset://previs/shot-01-last"},
+    "shot-01-greybox": {"role": "greybox", "uri": "asset://previs/shot-01-greybox"}
+  },
+  "characters": {
+    "lead": {"identity_asset_id": "lead-face"}
+  },
+  "shots": [
+    {
+      "id": "01",
+      "duration_seconds": 8,
+      "aspect_ratio": "9:16",
+      "character_ids": ["lead"],
+      "wardrobe_by_character": {"lead": "lead-office"},
+      "environment_asset_id": "office-set",
+      "input_mode": "identity_refs",
+      "visual_en": "An adult East Asian woman in a quiet futuristic office at dusk, natural skin texture and subdued blue light.",
+      "action_en": "She looks up slowly from the desk and notices the empty room.",
+      "camera_en": "Eye-level medium close-up, slow 20-centimetre dolly in, camera remains on the same side of the action axis.",
+      "dialogue_zh": "这里怎么一个人都没有？",
+      "previs": {
+        "first_frame_asset_id": "shot-01-first",
+        "last_frame_asset_id": "shot-01-last",
+        "greybox_clip_asset_id": "shot-01-greybox"
+      }
+    }
+  ]
+}
