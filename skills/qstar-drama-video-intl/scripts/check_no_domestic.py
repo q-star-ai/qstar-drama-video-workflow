@@ -159,7 +159,7 @@ def _in_skill_tests(path):
     return path.resolve().is_relative_to(_SKILL_ROOT / "tests")
 
 
-def _url_allowed(url, norm_rel, path, line=None):
+def _url_allowed(url, norm_rel, path, line=None, ctx=None):
     """Purpose-aware whitelist check.
 
     `line` is the full source line. When omitted (legacy callers) the doc-link
@@ -174,7 +174,22 @@ def _url_allowed(url, norm_rel, path, line=None):
         return False
     if CONFIG_CONTEXT_RE.search(line):
         return False
-    return ("](" + url + ")") in line
+    if ctx is None or ctx.get("in_fence") or ctx.get("prev_config"):
+        return False
+    start = ctx.get("start")
+    if start is None:
+        return False
+    # Bind to THIS occurrence: must be `](URL)` at this exact position.
+    if line[max(0, start - 2):start] != "](" or line[start + len(url):start + len(url) + 1] != ")":
+        return False
+    lb = line.rfind("[", 0, start)
+    if lb < 0:
+        return False
+    prefix = line[:lb]
+    # Not inside inline code / string literal / assignment.
+    if any(ch in prefix for ch in "`\"'=") or line.count("`") % 2:
+        return False
+    return True
 
 
 def scan_file(path, norm_rel):
@@ -185,16 +200,33 @@ def scan_file(path, norm_rel):
         # An inspected target that cannot be read is a hard failure: report it
         # as a hit and force a non-zero exit (never silently passed).
         return [(0, f"cannot read file: {error}")]
+    return scan_text(text, path, norm_rel)
+
+
+def scan_text(text, path, norm_rel):
+    hits = []
+    in_fence = False
+    prev_config = False
     for lineno, line in enumerate(text.splitlines(), 1):
+        stripped = line.strip()
+        fence_line = stripped.startswith("```") or stripped.startswith("~~~")
         # Domestic strings: checked on EVERY line, independent of whitelist.
         if STRING_RE.search(line):
             hits.append((lineno, "forbidden domestic/fallback string: " + line.strip()))
         if HOST120_RE.search(line):
             hits.append((lineno, "matched 120-host address: " + line.strip()))
         # URL check: whitelisted only by exact (normalized relative path, URL).
-        for match in URL_RE.findall(line):
-            if not _url_allowed(match, norm_rel, path, line):
-                hits.append((lineno, "default URL not whitelisted: " + match))
+        for m in URL_RE.finditer(line):
+            ctx = {"start": m.start(), "in_fence": in_fence or fence_line,
+                   "prev_config": prev_config}
+            if not _url_allowed(m.group(0), norm_rel, path, line, ctx):
+                hits.append((lineno, "default URL not whitelisted: " + m.group(0)))
+        if fence_line:
+            in_fence = not in_fence
+        # Conservative cross-line config context: a key line (`key:` / `key =`)
+        # or any config keyword taints the next non-blank line.
+        if stripped:
+            prev_config = bool(CONFIG_CONTEXT_RE.search(line)) or stripped.endswith((":", "=", "{", "[", ","))
     return hits
 
 

@@ -379,7 +379,7 @@ class ScannerRootCollisionTest(unittest.TestCase):
             self.assertFalse(mod._url_allowed("https://overseas.example/api", mod._rel_path(p), p), fake)
         real = REPO_ROOT / "references" / "character-consistency.md"
         doc_line = "See [CozyClay](" + url + ")."
-        self.assertTrue(mod._url_allowed(url, mod._rel_path(real), real, doc_line))
+        self.assertFalse([h for h in mod.scan_text(doc_line, real, mod._rel_path(real)) if "URL" in h[1]])
 
 
 class ScannerUrlPurposeTest(unittest.TestCase):
@@ -394,10 +394,13 @@ class ScannerUrlPurposeTest(unittest.TestCase):
         cls.repo = REPO_ROOT.parent.parent
         cls.url = "https" + "://github.com/NomaDamas/CozyClay"
 
-    def _hits(self, path, line):
+    def _hits(self, path, text):
         mod = self.mod
-        return [d for d in [line] for m in mod.URL_RE.findall(d)
-                if not mod._url_allowed(m, mod._rel_path(path), path, d)]
+        return [h for h in mod.scan_text(text, path, mod._rel_path(path))
+                if "URL" in h[1]]
+
+    def _hits_text(self, text):
+        return self._hits(self.repo / "README-intl.md", text)
 
     def test_readme_config_assignment_with_doc_url_is_reported(self):
         readme = self.repo / "README-intl.md"
@@ -417,6 +420,25 @@ class ScannerUrlPurposeTest(unittest.TestCase):
         self.assertTrue(self._hits(readme, "Project: <" + self.url + ">"))
         lic = self.url + "/blob/main/LICENSING.md"
         self.assertFalse(self._hits(ref, "[its licensing note](" + lic + ")"))
+
+    def test_r5_bypasses_reported(self):
+        u = self.url
+        cases = [
+            "See [CozyClay](" + u + ") " + u,
+            "`[CozyClay](" + u + ")`",
+            "```python\nservice = \"[CozyClay](" + u + ")\"\n```",
+            "~~~\n[CozyClay](" + u + ")\n~~~",
+            "api_base_url:\n  \"[CozyClay](" + u + ")\"",
+            "endpoint =\n[CozyClay](" + u + ")",
+            "service = \"[CozyClay](" + u + ")\"",
+        ]
+        for c in cases:
+            with self.subTest(c=c):
+                self.assertTrue(self._hits_text(c), c)
+
+    def test_doc_link_after_fence_closes_passes(self):
+        u = self.url
+        self.assertFalse(self._hits_text("```\nx\n```\n\nSee [CozyClay](" + u + ") for details."))
 
     def test_doc_link_in_non_md_file_is_reported(self):
         p = REPO_ROOT / "scripts" / "drama_workflow.py"
