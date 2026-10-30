@@ -345,9 +345,6 @@ class ScannerWhitelistTests(unittest.TestCase):
         self.assertIn("does not exist", proc.stderr)
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
-
 
 class ScannerInvocationIndependenceTest(unittest.TestCase):
     """Whitelist lookup must not depend on scan arguments or cwd (R3 follow-up)."""
@@ -363,3 +360,26 @@ class ScannerInvocationIndependenceTest(unittest.TestCase):
         for cmd, cwd in runs:
             proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
             self.assertEqual(proc.returncode, 0, (cmd, cwd, proc.stdout))
+
+
+class ScannerRootCollisionTest(unittest.TestCase):
+    """Repo-root files must not borrow skill-relative whitelist entries."""
+
+    def test_repo_root_lookalike_paths_not_whitelisted(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cnd", SCANNER)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        repo = REPO_ROOT.parent.parent
+        url = "https://github.com/NomaDamas/CozyClay"
+        for fake in ("scripts/check_no_domestic.py", "references/character-consistency.md",
+                     "tests/test_not_configured.py"):
+            p = repo / fake
+            self.assertFalse(mod._url_allowed(url, mod._rel_path(p), p), fake)
+            self.assertFalse(mod._url_allowed("https://overseas.example/api", mod._rel_path(p), p), fake)
+        real = REPO_ROOT / "references" / "character-consistency.md"
+        self.assertTrue(mod._url_allowed(url, mod._rel_path(real), real))
+
+
+if __name__ == "__main__":
+    unittest.main()

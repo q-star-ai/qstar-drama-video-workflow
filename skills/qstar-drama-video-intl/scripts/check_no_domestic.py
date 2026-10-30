@@ -103,23 +103,23 @@ SKIP_DIRECTORIES = (".git", "__pycache__")
 #         path starts with `tests/`. ---
 _URL_WHITELIST = {
     "https://github.com/NomaDamas/CozyClay": {
-        "references/character-consistency.md",
+        "skills/qstar-drama-video-intl/references/character-consistency.md",
         "README-intl.md",
-        "scripts/check_no_domestic.py",
-        "tests/test_not_configured.py",
+        "skills/qstar-drama-video-intl/scripts/check_no_domestic.py",
+        "skills/qstar-drama-video-intl/tests/test_not_configured.py",
     },
     "https://github.com/NomaDamas/CozyClay/blob/main/LICENSING.md": {
-        "references/character-consistency.md",
-        "scripts/check_no_domestic.py",
+        "skills/qstar-drama-video-intl/references/character-consistency.md",
+        "skills/qstar-drama-video-intl/scripts/check_no_domestic.py",
     },
     "https://x.com/AISuperDomain/status/2114327756532036045": {
-        "references/character-consistency.md",
-        "scripts/check_no_domestic.py",
+        "skills/qstar-drama-video-intl/references/character-consistency.md",
+        "skills/qstar-drama-video-intl/scripts/check_no_domestic.py",
     },
     # Test-only fixture; whitelisted solely inside files under tests/, plus this
     # scanner's own source (which references it only as a whitelist key, never as
     # a real default).
-    "https://overseas.example/api": {"__TESTS_ONLY__", "scripts/check_no_domestic.py"},
+    "https://overseas.example/api": {"__TESTS_ONLY__", "skills/qstar-drama-video-intl/scripts/check_no_domestic.py"},
 }
 
 
@@ -128,21 +128,17 @@ _REPO_ROOT = _SKILL_ROOT.parent.parent
 
 
 def _rel_path(path, root=None):
-    """Normalized POSIX path used for whitelist lookup, anchored at FIXED roots.
+    """Repo-relative POSIX path (single fixed anchor, so no cross-root collision).
 
-    The result does not depend on the scan arguments or the cwd: files inside
-    the intl skill map to skill-relative paths (e.g. `tests/x.py`), other files
-    inside the repo map to repo-relative paths (e.g. `README-intl.md`), and
-    anything outside the repo maps to its absolute path (never whitelisted).
-    `root` is accepted for call compatibility and ignored.
+    Skill files map to `skills/qstar-drama-video-intl/...`, repo files to e.g.
+    `README-intl.md`; anything outside the repo maps to its absolute path and
+    is never whitelisted. `root` is accepted for compatibility and ignored.
     """
     real = path.resolve()
-    for anchor in (_SKILL_ROOT, _REPO_ROOT):
-        try:
-            return real.relative_to(anchor).as_posix()
-        except ValueError:
-            continue
-    return real.as_posix()
+    try:
+        return real.relative_to(_REPO_ROOT).as_posix()
+    except ValueError:
+        return real.as_posix()
 
 
 def _url_allowed(url, norm_rel, path):
