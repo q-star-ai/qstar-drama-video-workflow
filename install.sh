@@ -2,24 +2,26 @@
 set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-skill_source="$repo_root/skills/qstar-drama-video"
 
-for skill_parent in "$HOME/.codex/skills" "$HOME/.claude/skills" "$HOME/.config/opencode/skills" "$HOME/.agents/skills"; do
-  mkdir -p "$skill_parent"
-  destination="$skill_parent/qstar-drama-video"
-  if [ -L "$destination" ]; then
-    current=$(readlink "$destination")
-    if [ "$current" = "$skill_source" ]; then
-      printf 'already installed: %s\n' "$destination"
-      continue
+for skill in qstar-drama-video qstar-drama-video-intl; do
+  skill_source="$repo_root/skills/$skill"
+  for skill_parent in "$HOME/.codex/skills" "$HOME/.claude/skills" "$HOME/.config/opencode/skills" "$HOME/.agents/skills"; do
+    mkdir -p "$skill_parent"
+    destination="$skill_parent/$skill"
+    if [ -L "$destination" ]; then
+      current=$(readlink "$destination")
+      if [ "$current" = "$skill_source" ]; then
+        printf 'already installed: %s\n' "$destination"
+        continue
+      fi
+      printf 'refusing to replace existing link: %s\n' "$destination" >&2
+      exit 1
     fi
-    printf 'refusing to replace existing link: %s\n' "$destination" >&2
-    exit 1
-  fi
-  if [ -e "$destination" ]; then
-    printf 'refusing to replace existing skill: %s\n' "$destination" >&2
-    exit 1
-  fi
-  ln -s "$skill_source" "$destination"
-  printf 'installed: %s\n' "$destination"
+    if [ -e "$destination" ]; then
+      printf 'refusing to replace existing skill: %s\n' "$destination" >&2
+      exit 1
+    fi
+    ln -s "$skill_source" "$destination"
+    printf 'installed: %s\n' "$destination"
+  done
 done
