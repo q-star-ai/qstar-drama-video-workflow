@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy to overseas.json (gitignored). Default verified=false keeps submit/generate offline (exit 2). Never put 43.x or drama.q-star.ink here. INTERNAL_WORKER_TOKEN stays in env / secrets files, not this JSON.",
+  "api_base_url": "http://127.0.0.1:8080",
+  "queue": "local-d1-jobs",
+  "asset_store": "local-disk",
+  "callback_url": "",
+  "playback_base_url": "http://127.0.0.1:8080",
+  "billing_account": "local-dev",
+  "verified": false,
+  "_how_to_verify": [
+    "1) Start: node dev/mock-google.mjs & node dev/mock-s3.mjs & npx wrangler pages dev public --port 8080 --ip 127.0.0.1 (in qstar-drama-intl-web-backend-dev @ 613a69f)",
+    "2) Set verified to true HERE, OR export QSTAR_OVERSEAS_VERIFIED=1",
+    "3) For loopback api_base_url also set QSTAR_OVERSEAS_TEST_BASE=1 (skill refuses non-intl hosts otherwise)",
+    "4) export INTERNAL_WORKER_TOKEN from ~/.config/dispatch/secrets/drama-intl-worker.env (same as .dev.vars)",
+    "5) python3 scripts/drama_workflow.py submit <episode.json> <shot>  → Bearer claim dry-run",
+    "Do NOT set verified for production until overseas Pages deploy + secret put are done by Tiger."
+  ]
+}
