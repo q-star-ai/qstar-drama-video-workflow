@@ -461,6 +461,43 @@ class ScannerUrlPurposeTest(unittest.TestCase):
             shutil.move(backup, readme)
 
 
+
+class ScannerNarrowExemptionTest(unittest.TestCase):
+    """14:57 narrowing: only git-ignored files and example comment/loopback text are exempt."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("cnd_narrow", SCANNER)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+        cls.bad_host = "".join(("drama.", "q-star", ".ink"))
+        cls.bad_ip = "".join(("43", ".136.99.128"))
+
+    def test_real_code_violations_still_caught(self):
+        mod = self.mod
+        code = REPO_ROOT / "scripts" / "drama_workflow.py"
+        for line in ('BASE = "https://' + self.bad_host + '/api"',
+                     '# ' + self.bad_ip,
+                     '"_comment": "' + self.bad_host + '"',
+                     'API = "' + "ht" + "tp://127.0.0.1:8080" + '"'):
+            self.assertTrue(mod.scan_text(line, code, mod._rel_path(code)), line)
+
+    def test_example_config_only_comment_and_loopback_exempt(self):
+        mod = self.mod
+        ex = REPO_ROOT / "config" / "overseas.local.example.json"
+        rel = mod._rel_path(ex)
+        self.assertFalse(mod.scan_text('  "_comment": "never use ' + self.bad_host + '",', ex, rel))
+        self.assertFalse(mod.scan_text('  "api_base_url": "ht" + "tp://127.0.0.1:8080",', ex, rel))
+        self.assertTrue(mod.scan_text('  "api_base_url": "https://' + self.bad_host + '",', ex, rel))
+        self.assertTrue(mod.scan_text('  "note": "' + self.bad_ip + '",', ex, rel))
+        self.assertTrue(mod.scan_text('  "api_base_url": "' + "ht" + "tps://evil.example.com" + '",', ex, rel))
+        self.assertTrue(mod.scan_text('  "_comment": "' + "ht" + "tp://127.0.0.1.evil.com/x" + '",', ex, rel))
+
+    def test_tracked_file_never_treated_as_ignored(self):
+        self.assertFalse(self.mod._git_ignored(SCANNER))
+        self.assertFalse(self.mod._git_ignored(REPO_ROOT / "config" / "overseas.local.example.json"))
+
 if __name__ == "__main__":
     unittest.main()
 

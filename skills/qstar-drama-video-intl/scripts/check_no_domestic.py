@@ -96,6 +96,38 @@ HOST120_RE = re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.120\b")
 
 SKIP_DIRECTORIES = (".git", "__pycache__")
 
+# --- E. Narrow exemptions (Tiger 2026-10-31 14:57). ---
+# E1. Git-ignored files (e.g. a local config/overseas.json) are never shipped,
+#     so a DIRECTORY walk skips them and lists them as skipped. A file named
+#     explicitly on the command line is still scanned. Tracked files are never
+#     skipped.
+# E2. Tracked example configs (`*.example.json`) may (a) carry a `"_comment"`
+#     line that names forbidden hosts as a warning, and (b) use loopback URLs
+#     (127.0.0.1 / localhost) as example values. Every other line/URL in those
+#     files, and every line in all other files, is checked exactly as before.
+_EXAMPLE_COMMENT_RE = re.compile(r'^\s*"_comment"\s*:')
+_LOOPBACK_URL_RE = re.compile(r"(?i)^https?://(127\.0\.0\.1|localhost)(:\d+)?(/[^\s\"']*)?$")
+
+
+def _is_example_config(path):
+    return path.name.lower().endswith(".example.json")
+
+
+def _git_ignored(path):
+    import subprocess
+    try:
+        proc = subprocess.run(["git", "-C", str(path.resolve().parent), "check-ignore", "-q",
+                               "--no-index", str(path.resolve())],
+                              capture_output=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if proc.returncode != 0:
+        return False
+    # Never treat a tracked file as ignored.
+    tracked = subprocess.run(["git", "-C", str(path.resolve().parent), "ls-files", "--error-unmatch",
+                              str(path.resolve())], capture_output=True, timeout=10)
+    return tracked.returncode != 0
+
 # --- B. URL whitelist, split by PURPOSE (R5). ---
 # URLs are built from fragments so this source file itself contains no URL
 # literal (the scanner scans itself and must stay clean without self-exclusion).
@@ -209,14 +241,17 @@ def scan_text(text, path, norm_rel):
     prev_config = False
     for lineno, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
+        example_comment = _is_example_config(path) and bool(_EXAMPLE_COMMENT_RE.match(line))
         fence_line = stripped.startswith("```") or stripped.startswith("~~~")
         # Domestic strings: checked on EVERY line, independent of whitelist.
-        if STRING_RE.search(line):
+        if STRING_RE.search(line) and not example_comment:
             hits.append((lineno, "forbidden domestic/fallback string: " + line.strip()))
         if HOST120_RE.search(line):
             hits.append((lineno, "matched 120-host address: " + line.strip()))
         # URL check: whitelisted only by exact (normalized relative path, URL).
         for m in URL_RE.finditer(line):
+            if _is_example_config(path) and _LOOPBACK_URL_RE.match(m.group(0)):
+                continue
             ctx = {"start": m.start(), "in_fence": in_fence or fence_line,
                    "prev_config": prev_config}
             if not _url_allowed(m.group(0), norm_rel, path, line, ctx):
@@ -249,6 +284,9 @@ def _iter_files(root):
         skip_dir = next((d for d in SKIP_DIRECTORIES if d in parts), None)
         if skip_dir:
             yield ("SKIP", path, skip_dir)
+            continue
+        if _git_ignored(path):
+            yield ("SKIP", path, "git-ignored")
             continue
         yield (path, _rel_path(path, base))
 
