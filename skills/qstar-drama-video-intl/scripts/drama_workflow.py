@@ -2,7 +2,7 @@
 """Deterministic planning for short-drama video jobs.
 
 This is the international edition. The `validate`, `prompt` and `plan` subcommands
-are fully local (no network or GPU). The `submit` and `generate` subcommands stay
+are fully local (no network or GPU). The `submit` / `generate` subcommands stay
 offline with NOT CONFIGURED (exit 2) until `config/overseas.json` is complete AND
 an explicit verified gate is set (`verified: true` in that file, or env
 `QSTAR_OVERSEAS_VERIFIED=1`). Only then may they call the overseas Pages internal
@@ -277,14 +277,13 @@ def post_internal(api_base, token, action, body):
 
 
 def cmd_submit_generate(command, manifest_path, shot_id):
-    """submit/generate: exit 2 offline until configured+verified; then Bearer internal API.
+    """submit/generate: exit 2 until overseas configured+verified; never claim.
 
-    Contract (aligned with drama-gpu-worker):
-      - User-facing POST /api/jobs still needs a session cookie (website creates queued jobs).
-      - This Skill never uses cookies. When verified, it probes/acts on /api/internal/jobs/*
-        with INTERNAL_WORKER_TOKEN (same as the box worker).
-      - submit: validate + build shot plan, then POST claim (dry-run of worker lease contract).
-      - generate: same gate; POST claim once (worker pull). Does not start GPU or upload R2.
+    Contract (decoupled from drama-gpu-worker claim loop):
+      - Website (session cookie) owns POST /api/jobs → queued jobs.
+      - drama-gpu-worker owns claim → Comfy H3 (QSTAR_GENERATE_HOOK) → R2 → complete.
+      - This Skill only validates + emits a shot plan (and documents the split).
+      - Use `probe` / `status` for read-only Bearer checks (gpu-state), not claim.
     """
     configured, missing, config = check_overseas_configured()
     if not configured:
@@ -297,11 +296,6 @@ def cmd_submit_generate(command, manifest_path, shot_id):
         print("overseas backend not yet verified; refusing to submit/generate", file=sys.stderr)
         return NOT_CONFIGURED_EXIT
 
-    token = worker_token()
-    if not token:
-        print("NOT CONFIGURED: INTERNAL_WORKER_TOKEN env missing (Bearer only; no session cookie)", file=sys.stderr)
-        return NOT_CONFIGURED_EXIT
-
     try:
         api_base = assert_api_base_allowed(config["api_base_url"])
         manifest = load_json(manifest_path)
@@ -312,22 +306,61 @@ def cmd_submit_generate(command, manifest_path, shot_id):
         print(f"drama_workflow: {error}", file=sys.stderr)
         return 1
 
-    worker_id = (os.environ.get("QSTAR_WORKER_ID") or "skill-intl-dryrun").strip() or "skill-intl-dryrun"
-    status, body = post_internal(api_base, token, "claim", {"worker_id": worker_id})
-    # Never echo Authorization. Body from server is fine (no token).
     out = {
         "command": command,
         "verified": True,
         "api_base_url": api_base,
         "queue": config["queue"],
         "shot_plan": plan_job,
-        "internal_action": "claim",
+        "internal_action": None,
+        "role_split": {
+            "site_create_job": "POST /api/jobs (session cookie) — website only",
+            "worker_render": (
+                "drama-gpu-worker claim → QSTAR_GENERATE_HOOK="
+                "hooks/comfy_h3_generate.py → R2 → complete"
+            ),
+            "skill_role": "validate / prompt / plan / submit(plan-only) / probe",
+        },
+        "note": (
+            "submit/generate no longer call /api/internal/jobs/claim "
+            "(avoids racing the GPU worker). Use `probe` for Bearer reachability."
+        ),
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_probe(action="gpu-state"):
+    """Read-only Bearer probe against overseas internal API (no claim)."""
+    configured, missing, config = check_overseas_configured()
+    if not configured:
+        if missing == list(REQUIRED_OVERSEAS_FIELDS) and not config_path().exists():
+            print("NOT CONFIGURED: overseas backend", file=sys.stderr)
+        else:
+            print("NOT CONFIGURED: overseas backend; missing fields: " + ", ".join(missing), file=sys.stderr)
+        return NOT_CONFIGURED_EXIT
+    if not is_overseas_verified(config):
+        print("overseas backend not yet verified; refusing to probe", file=sys.stderr)
+        return NOT_CONFIGURED_EXIT
+    token = worker_token()
+    if not token:
+        print("NOT CONFIGURED: INTERNAL_WORKER_TOKEN env missing (Bearer only; no session cookie)", file=sys.stderr)
+        return NOT_CONFIGURED_EXIT
+    try:
+        api_base = assert_api_base_allowed(config["api_base_url"])
+    except ManifestError as error:
+        print(f"drama_workflow: {error}", file=sys.stderr)
+        return 1
+    # gpu-state does not lease jobs
+    status, body = post_internal(api_base, token, "gpu-state", {})
+    out = {
+        "command": "probe",
+        "verified": True,
+        "api_base_url": api_base,
+        "internal_action": "gpu-state",
         "http_status": status,
         "response": body,
-        "note": (
-            "User job creation remains POST /api/jobs (session cookie). "
-            "This Skill/worker path only uses Bearer /api/internal/jobs/*."
-        ),
+        "note": "probe never claims jobs; rendering remains drama-gpu-worker.",
     }
     print(json.dumps(out, ensure_ascii=False, indent=2))
     if status >= 400:
@@ -347,14 +380,30 @@ def main():
         command.add_argument("shot_id")
         if name == "plan":
             command.add_argument("providers")
-    submit_command = commands.add_parser("submit", help="Submit via overseas internal API when verified (else NOT CONFIGURED)")
+    submit_command = commands.add_parser(
+        "submit",
+        help="When verified: validate + shot plan only (site creates jobs; no claim). Else NOT CONFIGURED",
+    )
     submit_command.add_argument("manifest")
     submit_command.add_argument("shot_id")
-    generate_command = commands.add_parser("generate", help="Generate/claim via overseas internal API when verified (else NOT CONFIGURED)")
+    generate_command = commands.add_parser(
+        "generate",
+        help="When verified: document worker render path (no claim / no GPU). Else NOT CONFIGURED",
+    )
     generate_command.add_argument("manifest")
     generate_command.add_argument("shot_id")
+    probe_command = commands.add_parser(
+        "probe",
+        help="When verified: Bearer gpu-state probe (read-only, no claim). Else NOT CONFIGURED",
+    )
+    status_command = commands.add_parser(
+        "status",
+        help="Alias of probe",
+    )
     args = parser.parse_args()
     try:
+        if args.command in ("probe", "status"):
+            return cmd_probe()
         if args.command in ("submit", "generate"):
             return cmd_submit_generate(args.command, args.manifest, args.shot_id)
         manifest = load_json(args.manifest)
