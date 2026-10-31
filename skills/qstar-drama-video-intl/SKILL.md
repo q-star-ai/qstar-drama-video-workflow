@@ -1,6 +1,6 @@
 ---
 name: qstar-drama-video-intl
-description: International edition of the Q-Star short-drama storyboard-to-video skill. Provides local, deterministic validate / prompt / plan for locked character assets, scene previsualization and provider routing. The submit / generate steps connect to an overseas backend that is NOT configured in this draft; they stop and report "not configured" rather than pretending to work. Use for storyboard-to-video planning; not for narrated tutorial videos.
+description: International edition of the Q-Star short-drama storyboard-to-video skill. Provides local, deterministic validate / prompt / plan for locked character assets, scene previsualization and provider routing. The submit / generate steps stay offline (NOT CONFIGURED) until overseas.json is complete and an explicit verified gate is set; then they use Bearer INTERNAL_WORKER_TOKEN against the intl internal jobs API (never a user cookie). Use for storyboard-to-video planning; not for narrated tutorial videos.
 ---
 
 # Q-Star Short-Drama Video Workflow (International Edition)
@@ -19,4 +19,4 @@ For every job, establish the script version, shot breakdown, customer-approved c
 
 This Skill is the raw Q-Star workflow instruction set; it contains no CozyClay code or customer assets. Before the first website adapter deployment, read [Site Integration Notes](references/site-integration.md).
 
-> **Overseas execution is not configured in this draft.** The `submit` and `generate` subcommands exist but stop immediately with `NOT CONFIGURED` (exit code 2). Do not reuse domestic production data or customer assets for the overseas backend.
+> **Overseas Pages deploy and GPU power-on are still NOT done.** Without `verified: true` / `QSTAR_OVERSEAS_VERIFIED=1`, `submit`/`generate` exit 2 with zero network. When verified, they Bearer-call `/api/internal/jobs/*` only. Do not reuse domestic production data or customer assets.
