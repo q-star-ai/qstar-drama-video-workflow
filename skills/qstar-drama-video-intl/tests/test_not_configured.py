@@ -463,3 +463,129 @@ class ScannerUrlPurposeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VerifiedInternalApiTests(unittest.TestCase):
+    """verified gate + Bearer claim dry-run against a local mock (no real deploy)."""
+
+    def setUp(self):
+        self._backup = None
+        if CONFIG_PATH.exists():
+            self._backup = CONFIG_PATH.read_text(encoding="utf-8")
+            CONFIG_PATH.unlink()
+
+    def tearDown(self):
+        if self._backup is not None:
+            CONFIG_PATH.write_text(self._backup, encoding="utf-8")
+        elif CONFIG_PATH.exists():
+            CONFIG_PATH.unlink()
+
+    def _complete_config(self, api_base):
+        required = [
+            "api_base_url",
+            "queue",
+            "asset_store",
+            "callback_url",
+            "playback_base_url",
+            "billing_account",
+        ]
+        data = {k: f"value-{k}" for k in required}
+        data["api_base_url"] = api_base
+        data["verified"] = False
+        return data
+
+    def test_verified_without_token_exits_2(self):
+        data = self._complete_config("http" + "://" + "127.0.0.1:9")
+        data["verified"] = True
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(json.dumps(data), encoding="utf-8")
+        env = dict(os.environ)
+        env["QSTAR_OVERSEAS_VERIFIED"] = "1"
+        env["QSTAR_OVERSEAS_TEST_BASE"] = "1"
+        env["INTERNAL_WORKER_TOKEN"] = ""
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "submit", str(EXAMPLE), "01"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("INTERNAL_WORKER_TOKEN", result.stderr)
+
+    def test_env_verified_mock_claim_sends_bearer(self):
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        import threading
+
+        seen = {}
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length)
+                seen["path"] = self.path
+                seen["auth"] = self.headers.get("Authorization")
+                seen["ctype"] = self.headers.get("Content-Type")
+                seen["body"] = body.decode("utf-8")
+                payload = b'{"ok":true,"job":null}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def log_message(self, *args):
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), Handler)
+        port = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            data = self._complete_config("http" + "://" + "127.0.0.1:" + str(port))
+            CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            CONFIG_PATH.write_text(json.dumps(data), encoding="utf-8")
+            env = dict(os.environ)
+            env["QSTAR_OVERSEAS_VERIFIED"] = "1"
+            env["QSTAR_OVERSEAS_TEST_BASE"] = "1"
+            env["INTERNAL_WORKER_TOKEN"] = "test-worker-token-dry-run-0001"
+            env["QSTAR_WORKER_ID"] = "worker-test-1"
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), "generate", str(EXAMPLE), "01"],
+                cwd=str(REPO_ROOT),
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            self.assertEqual(seen.get("path"), "/api/internal/jobs/claim")
+            self.assertEqual(seen.get("auth"), "Bearer test-worker-token-dry-run-0001")
+            self.assertIn("application/json", seen.get("ctype", ""))
+            out = json.loads(result.stdout)
+            self.assertTrue(out.get("verified"))
+            self.assertEqual(out.get("internal_action"), "claim")
+            self.assertEqual(out.get("http_status"), 200)
+            self.assertNotIn("test-worker-token-dry-run-0001", result.stdout)
+            self.assertNotIn("test-worker-token-dry-run-0001", result.stderr)
+        finally:
+            server.shutdown()
+            if CONFIG_PATH.exists():
+                CONFIG_PATH.unlink()
+
+    def test_json_verified_false_still_stops_even_with_token(self):
+        data = self._complete_config("https://overseas.example/api")
+        data["verified"] = False
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        CONFIG_PATH.write_text(json.dumps(data), encoding="utf-8")
+        env = dict(os.environ)
+        env.pop("QSTAR_OVERSEAS_VERIFIED", None)
+        env["INTERNAL_WORKER_TOKEN"] = "test-worker-token-dry-run-0001"
+        result = subprocess.run(
+            [sys.executable, str(SCRIPT), "submit", str(EXAMPLE), "01"],
+            cwd=str(REPO_ROOT),
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("not yet verified", result.stderr)

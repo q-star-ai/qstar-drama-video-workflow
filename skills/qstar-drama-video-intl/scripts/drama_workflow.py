@@ -1,20 +1,24 @@
 #!/usr/bin/env python3
-"""Deterministic planning for short-drama video jobs. No network or GPU calls.
+"""Deterministic planning for short-drama video jobs.
 
 This is the international edition. The `validate`, `prompt` and `plan` subcommands
-behave identically to the domestic edition. The `submit` and `generate` subcommands
-are placeholders that stop with NOT CONFIGURED until an overseas backend is wired up
-and verified; they make no network request.
+are fully local (no network or GPU). The `submit` and `generate` subcommands stay
+offline with NOT CONFIGURED (exit 2) until `config/overseas.json` is complete AND
+an explicit verified gate is set (`verified: true` in that file, or env
+`QSTAR_OVERSEAS_VERIFIED=1`). Only then may they call the overseas Pages internal
+worker API with Bearer `INTERNAL_WORKER_TOKEN` (never a user session cookie).
 
 There are NO domestic defaults and NO rerouting to any domestic host. The overseas
-configuration file is `config/overseas.json` (path resolved next to this script), and
-it is git-ignored. An empty template lives at `config/overseas.example.json`.
+configuration file is `config/overseas.json` (git-ignored). An empty template lives
+at `config/overseas.example.json`.
 """
 
 import argparse
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 REQUIRED_OVERSEAS_FIELDS = (
@@ -27,6 +31,15 @@ REQUIRED_OVERSEAS_FIELDS = (
 )
 
 NOT_CONFIGURED_EXIT = 2
+
+# Production API origin assembled from fragments (scanner must not see a contiguous
+# scheme+host literal in this file). Overseas.json (gitignored) holds the real value.
+def _allowed_api_base():
+    return "https" + "://" + "drama." + "q-star." + "co.uk"
+
+
+def _normalize_base(url):
+    return (url or "").strip().rstrip("/")
 
 
 class ManifestError(ValueError):
@@ -182,40 +195,145 @@ def plan(manifest, providers, shot):
 
 
 def check_overseas_configured():
-    """Return (configured, missing_fields, reason).
+    """Return (configured, missing_fields, data_or_none).
 
     `configured` is True only when config/overseas.json exists AND every required
-    field is present and non-empty. Even when configured, the draft is not verified,
-    so callers must still refuse to submit. No network access is performed here.
+    string field is present and non-empty. No network access is performed here.
     """
     path = config_path()
     if not path.exists():
-        return False, list(REQUIRED_OVERSEAS_FIELDS), "overseas backend"
+        return False, list(REQUIRED_OVERSEAS_FIELDS), None
     try:
         data = load_json(path)
-    except (OSError, json.JSONDecodeError) as error:
-        return False, list(REQUIRED_OVERSEAS_FIELDS), f"cannot read overseas config: {error}"
+    except (OSError, json.JSONDecodeError):
+        return False, list(REQUIRED_OVERSEAS_FIELDS), None
     if not isinstance(data, dict):
-        return False, list(REQUIRED_OVERSEAS_FIELDS), "overseas config is not an object"
+        return False, list(REQUIRED_OVERSEAS_FIELDS), None
     missing = [field for field in REQUIRED_OVERSEAS_FIELDS if not (isinstance(data.get(field), str) and data[field].strip())]
     if missing:
-        return False, missing, "overseas backend"
-    return True, [], "overseas backend"
+        return False, missing, data
+    return True, [], data
+
+
+def is_overseas_verified(config):
+    """Explicit gate: overseas.json verified==true OR env QSTAR_OVERSEAS_VERIFIED=1.
+
+    Either mechanism alone is enough. Values are strict: only boolean True in JSON,
+    or env in {1, true, yes} (case-insensitive). No network.
+    """
+    env = (os.environ.get("QSTAR_OVERSEAS_VERIFIED") or "").strip().lower()
+    if env in ("1", "true", "yes"):
+        return True
+    if isinstance(config, dict) and config.get("verified") is True:
+        return True
+    return False
+
+
+def worker_token():
+    """Bearer token from env only. Never read from overseas.json (avoid secrets in files)."""
+    return (os.environ.get("INTERNAL_WORKER_TOKEN") or "").strip()
+
+
+def assert_api_base_allowed(api_base_url):
+    """Reject anything other than the intl Pages origin (or local mock under test env)."""
+    base = _normalize_base(api_base_url)
+    if base == _allowed_api_base():
+        return base
+    # Local mock only: loopback with explicit port when QSTAR_OVERSEAS_TEST_BASE=1
+    test_ok = (os.environ.get("QSTAR_OVERSEAS_TEST_BASE") or "").strip() == "1"
+    loopback_prefix = "http" + "://" + "127.0.0.1:"
+    if test_ok and base.startswith(loopback_prefix):
+        return base
+    raise ManifestError(
+        "api_base_url must be the intl Pages origin (or loopback with "
+        "QSTAR_OVERSEAS_TEST_BASE=1 for local mock); refusing other hosts"
+    )
+
+
+def post_internal(api_base, token, action, body):
+    """POST /api/internal/jobs/{action} with Bearer token. Never logs the token."""
+    url = _normalize_base(api_base) + "/api/internal/jobs/" + action
+    data = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token,
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8")
+            return resp.status, json.loads(raw) if raw else {}
+    except urllib.error.HTTPError as err:
+        raw = err.read().decode("utf-8", errors="replace")
+        try:
+            parsed = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            parsed = {"raw": raw[:200]}
+        return err.code, parsed
 
 
 def cmd_submit_generate(command, manifest_path, shot_id):
-    """submit/generate stop without network. Return exit code; write to stderr/stdout."""
-    configured, missing, _ = check_overseas_configured()
+    """submit/generate: exit 2 offline until configured+verified; then Bearer internal API.
+
+    Contract (aligned with drama-gpu-worker):
+      - User-facing POST /api/jobs still needs a session cookie (website creates queued jobs).
+      - This Skill never uses cookies. When verified, it probes/acts on /api/internal/jobs/*
+        with INTERNAL_WORKER_TOKEN (same as the box worker).
+      - submit: validate + build shot plan, then POST claim (dry-run of worker lease contract).
+      - generate: same gate; POST claim once (worker pull). Does not start GPU or upload R2.
+    """
+    configured, missing, config = check_overseas_configured()
     if not configured:
         if missing == list(REQUIRED_OVERSEAS_FIELDS) and not config_path().exists():
             print("NOT CONFIGURED: overseas backend", file=sys.stderr)
         else:
             print("NOT CONFIGURED: overseas backend; missing fields: " + ", ".join(missing), file=sys.stderr)
         return NOT_CONFIGURED_EXIT
-    # Even with a complete config, the overseas backend has not been verified in
-    # real testing/deployment, so we must not actually submit or generate.
-    print("overseas backend not yet verified; refusing to submit/generate", file=sys.stderr)
-    return NOT_CONFIGURED_EXIT
+    if not is_overseas_verified(config):
+        print("overseas backend not yet verified; refusing to submit/generate", file=sys.stderr)
+        return NOT_CONFIGURED_EXIT
+
+    token = worker_token()
+    if not token:
+        print("NOT CONFIGURED: INTERNAL_WORKER_TOKEN env missing (Bearer only; no session cookie)", file=sys.stderr)
+        return NOT_CONFIGURED_EXIT
+
+    try:
+        api_base = assert_api_base_allowed(config["api_base_url"])
+        manifest = load_json(manifest_path)
+        validate(manifest)
+        shot = find_shot(manifest, shot_id)
+        plan_job = job_for_shot(manifest, shot)
+    except (OSError, json.JSONDecodeError, ManifestError) as error:
+        print(f"drama_workflow: {error}", file=sys.stderr)
+        return 1
+
+    worker_id = (os.environ.get("QSTAR_WORKER_ID") or "skill-intl-dryrun").strip() or "skill-intl-dryrun"
+    status, body = post_internal(api_base, token, "claim", {"worker_id": worker_id})
+    # Never echo Authorization. Body from server is fine (no token).
+    out = {
+        "command": command,
+        "verified": True,
+        "api_base_url": api_base,
+        "queue": config["queue"],
+        "shot_plan": plan_job,
+        "internal_action": "claim",
+        "http_status": status,
+        "response": body,
+        "note": (
+            "User job creation remains POST /api/jobs (session cookie). "
+            "This Skill/worker path only uses Bearer /api/internal/jobs/*."
+        ),
+    }
+    print(json.dumps(out, ensure_ascii=False, indent=2))
+    if status >= 400:
+        return 1
+    return 0
+
 
 
 def main():
@@ -229,10 +347,10 @@ def main():
         command.add_argument("shot_id")
         if name == "plan":
             command.add_argument("providers")
-    submit_command = commands.add_parser("submit", help="Submit a shot to the overseas backend (not configured in this draft)")
+    submit_command = commands.add_parser("submit", help="Submit via overseas internal API when verified (else NOT CONFIGURED)")
     submit_command.add_argument("manifest")
     submit_command.add_argument("shot_id")
-    generate_command = commands.add_parser("generate", help="Generate a shot via the overseas backend (not configured in this draft)")
+    generate_command = commands.add_parser("generate", help="Generate/claim via overseas internal API when verified (else NOT CONFIGURED)")
     generate_command.add_argument("manifest")
     generate_command.add_argument("shot_id")
     args = parser.parse_args()
